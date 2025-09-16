@@ -1,6 +1,6 @@
 #+title: Readme
 
 * Running
-1. Run make
+1. Run =make=
 2. Run =bash scripts/run_example.bash=
 3. That's it
