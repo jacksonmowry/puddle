@@ -27,7 +27,7 @@ void softmax(vector<double>& x) {
     }
 
     for (double& d : x) {
-        // We may need this not sure
+        // TODO evaluate if we even want negative charges in our output layer
         // if (d < 0) {
         //     d = 0;
         // }
@@ -116,7 +116,8 @@ int main(int argc, char* argv[]) {
         fstream data(argv[2]);
         fstream labels(argv[3]);
 
-        int conf[4][4] = {0};
+        const size_t num_outputs = n->num_outputs();
+        vector<vector<int>> conf(num_outputs, vector<int>(num_outputs, 0));
         double loss = 0;
         size_t correct = 0;
         size_t total = 0;
@@ -192,18 +193,10 @@ int main(int argc, char* argv[]) {
                 const int target_class = data - 1;
                 target[target_class] = 1;
                 transform(output.begin(), output.end(), softmax_out.begin(),
-                          [](int x) { return (double)x /*/ 100*/; });
+                          [](int x) { return (double)x; });
 
                 softmax(softmax_out);
                 int predicted_class = max_element(softmax_out);
-                // printf("predicted class: %d | ", predicted_class);
-
-                // printf("[%2d, %2d, %2d, %2d] |\n", output[0], output[1],
-                // output[2],
-                //        output[3]);
-                // printf("[%.2f, %.2f, %.2f, %.2f] |", softmax_out[0],
-                //        softmax_out[1], softmax_out[2], softmax_out[3]);
-                // exit(1);
 
                 conf[target_class][predicted_class]++;
                 if (predicted_class == data - 1) {
@@ -213,25 +206,6 @@ int main(int argc, char* argv[]) {
 
                 double target_loss = -log(softmax_out[target_class]);
                 loss += target_loss;
-
-                // printf("%9s |",
-                //        predicted_class == data - 1 ? "CORRECT" :
-                //        "INCORRECT");
-                // printf("Target: [");
-                // for (size_t i = 0; i < target.size(); i++) {
-                //     printf("%.2f", target[i]);
-                //     if (i != target.size() - 1) {
-                //         printf(", ");
-                //     }
-                // }
-                // printf("], Output: [");
-                // for (size_t i = 0; i < softmax_out.size(); i++) {
-                //     printf("%.2f", softmax_out[i]);
-                //     if (i != softmax_out.size() - 1) {
-                //         printf(", ");
-                //     }
-                // }
-                // printf("]\n");
 
                 // Loop through each output neuron and make weight updates
                 size_t updates = 0;
@@ -245,13 +219,11 @@ int main(int argc, char* argv[]) {
                         int weight = (int)e->get(weight_idx);
                         double neuron_loss = target[i] - softmax_out[i];
                         int weight_delta = 15 * neuron_loss * firing_count;
-                        // fprintf(stderr, "Update of %d\n", weight_delta);
                         if (weight_delta != 0) {
                             desired_edge_updates[i][j].first += weight_delta;
                             desired_edge_updates[i][j].second++;
                         }
                     }
-                    // fprintf(stderr, "\n");
                 }
             }
             if (data.eof()) {
@@ -259,7 +231,7 @@ int main(int argc, char* argv[]) {
             }
             delete (p);
 
-            for (size_t i = 0; i < 4; i++) {
+            for (size_t i = 0; i < num_outputs; i++) {
                 Node* node = n->get_output(i);
 
                 for (size_t j = 0; j < node->incoming.size(); j++) {
@@ -269,27 +241,20 @@ int main(int argc, char* argv[]) {
                         int new_weight = (int)e->get(weight_idx) +
                                          desired_edge_updates[i][j].first /
                                              desired_edge_updates[i][j].second;
-                        // fprintf(stderr, "%d ",
-                        //         desired_edge_updates[i][j].first /
-                        //             desired_edge_updates[i][j].second);
                         if (new_weight < -255) {
                             new_weight = -255;
                         } else if (new_weight > 255) {
                             new_weight = 255;
                         }
                         e->set(weight_idx, new_weight);
-                        // fprintf(stderr, "%d ",
-                        //         (int)desired_edge_updates[i][j].first /
-                        //             desired_edge_updates[i][j].second);
                     }
                 }
-                // fprintf(stderr, "\n");
             }
         }
 
         printf("CONFUSION MATRIX:\n");
-        for (size_t i = 0; i < 4; i++) {
-            for (size_t j = 0; j < 4; j++) {
+        for (size_t i = 0; i < num_outputs; i++) {
+            for (size_t j = 0; j < num_outputs; j++) {
                 printf("%4d ", conf[i][j]);
             }
             puts("");
@@ -298,6 +263,5 @@ int main(int argc, char* argv[]) {
 
         printf("Accuracy: %.2f, Loss: %.2f\n", correct / (double)total,
                loss / (double)total);
-        // sleep(2);
     }
 }
