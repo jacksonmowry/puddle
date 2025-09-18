@@ -44,7 +44,12 @@ int main(int argc, char* argv[]) {
     size_t class_neurons = 3;
     char* filename = nullptr;
 
-    srand(time(NULL));
+    unsigned int seed;
+    FILE* rng = fopen("/dev/random", "r");
+    fread(&seed, sizeof(seed), 1, rng);
+    fclose(rng);
+
+    srand(seed);
 
     int c;
     int digit_optind = 0;
