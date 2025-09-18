@@ -46,7 +46,7 @@ void softmax(vector<double>& x) {
 
 int max_element(const vector<double>& x) {
     double max_elem = -1;
-    int max_idx = -1;
+    int max_idx = 0;
 
     for (size_t i = 0; i < x.size(); i++) {
         if (x[i] > max_elem) {
@@ -124,10 +124,11 @@ int main(int argc, char* argv[]) {
 
         const size_t batch_size = 70;
 
-
         // Batch loop
-        // TODO we should read in all data ahead of time (if ram usage isn't that big of a deal)
-        //      then we can avoid this while (true) loop and just use a calculated number of batches
+        // TODO we should read in all data ahead of time (if ram usage isn't
+        // that big of a deal)
+        //      then we can avoid this while (true) loop and just use a
+        //      calculated number of batches
         bool done = false;
         while (true) {
             if (done) {
@@ -214,14 +215,20 @@ int main(int argc, char* argv[]) {
 
                     for (size_t j = 0; j < node->incoming.size(); j++) {
                         Edge* e = node->incoming[j];
-                        size_t firing_count =
-                            p->neuron_counts()[e->from->id];
+                        size_t firing_count = p->neuron_counts()[e->from->id];
                         int weight = (int)e->get(weight_idx);
                         double neuron_loss = target[i] - softmax_out[i];
                         int weight_delta = 15 * neuron_loss * firing_count;
                         if (weight_delta != 0) {
-                            desired_edge_updates[i][j].first += weight_delta;
-                            desired_edge_updates[i][j].second++;
+                            if (epochs < 5) {
+                                desired_edge_updates[i][j].first +=
+                                    weight_delta;
+                                desired_edge_updates[i][j].second++;
+                            } else if (abs(neuron_loss) > 0.05) {
+                                desired_edge_updates[i][j].first +=
+                                    signbit(neuron_loss) ? -1 : 1;
+                                desired_edge_updates[i][j].second++;
+                            }
                         }
                     }
                 }
