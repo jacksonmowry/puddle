@@ -94,9 +94,10 @@ Network* load_network(Processor** pp, const json& network_json) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
+    if (argc != 6) {
         fprintf(stderr,
-                "usage: %s starting_resevoir.json data.csv labels.csv\n",
+                "usage: %s starting_resevoir.json data.csv labels.csv lambda "
+                "learning_rate\n",
                 argv[0]);
         exit(1);
     }
@@ -106,6 +107,12 @@ int main(int argc, char* argv[]) {
 
     ifstream fin(argv[1]);
     fin >> network_json;
+
+    double lambda = 0.000001;
+    double learning_rate = 0.001;
+
+    sscanf(argv[4], "%lf", &lambda);
+    sscanf(argv[5], "%lf", &learning_rate);
 
     Network* n = new Network();
     n->from_json(network_json);
@@ -135,7 +142,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
             size_t batch_samples = 0;
-            vector<vector<pair<int, int>>> desired_edge_updates(
+            vector<vector<pair<double, int>>> desired_edge_updates(
                 n->num_outputs());
             for (size_t i = 0; i < desired_edge_updates.size(); i++) {
                 Node* node = n->get_output(i);
@@ -182,7 +189,7 @@ int main(int argc, char* argv[]) {
                 p->run(100);
 
                 vector<double> output_charges = p->neuron_charges();
-                vector<int> output;
+                vector<double> output;
                 for (size_t i = 0; i < n->num_outputs(); i++) {
                     output.push_back(output_charges[output_charges.size() -
                                                     n->num_outputs() + i]);
@@ -196,7 +203,6 @@ int main(int argc, char* argv[]) {
                 transform(output.begin(), output.end(), softmax_out.begin(),
                           [](int x) { return (double)x; });
 
-                softmax(softmax_out);
                 int predicted_class = max_element(softmax_out);
 
                 conf[target_class][predicted_class]++;
@@ -205,7 +211,25 @@ int main(int argc, char* argv[]) {
                 }
                 total++;
 
-                double target_loss = -log(softmax_out[target_class]);
+                // Calculate sample loss
+
+                // double target_loss = -log(softmax_out[target_class]);
+                double target_loss = 0;
+                for (size_t c = 0; c < target.size(); c++) {
+                    target_loss += pow(target[c] - softmax_out[c], 2);
+                }
+                // Adding norm loss
+                for (size_t i = 0; i < num_outputs; i++) {
+                    Node* node = n->get_output(i);
+
+                    for (size_t j = 0; j < node->incoming.size(); j++) {
+                        Edge* e = node->incoming[j];
+                        // fprintf(stderr, "%f %f\n", e->get(weight_idx),
+                        //         e->get(weight_idx) * lambda);
+                        target_loss += lambda * e->get(weight_idx);
+                    }
+                }
+                // Adding norm loss
                 loss += target_loss;
 
                 // Loop through each output neuron and make weight updates
@@ -215,21 +239,18 @@ int main(int argc, char* argv[]) {
 
                     for (size_t j = 0; j < node->incoming.size(); j++) {
                         Edge* e = node->incoming[j];
-                        size_t firing_count = p->neuron_counts()[e->from->id];
-                        int weight = (int)e->get(weight_idx);
+                        double weight = (double)e->get(weight_idx);
                         double neuron_loss = target[i] - softmax_out[i];
-                        int weight_delta = 15 * neuron_loss * firing_count;
-                        if (weight_delta != 0) {
-                            if (epochs < 5) {
-                                desired_edge_updates[i][j].first +=
-                                    weight_delta;
-                                desired_edge_updates[i][j].second++;
-                            } else if (abs(neuron_loss) > 0.05) {
-                                desired_edge_updates[i][j].first +=
-                                    signbit(neuron_loss) ? -1 : 1;
-                                desired_edge_updates[i][j].second++;
-                            }
-                        }
+                        double firing_count = p->neuron_counts()[e->from->id];
+                        // fprintf(stderr, "Loss: %f, Weight: %f, Update: %f\n",
+                        //         neuron_loss, weight,
+                        //         neuron_loss * weight * 0.01);
+                        desired_edge_updates[i][j].first -=
+                            learning_rate *
+                            ((neuron_loss * weight /
+                              (firing_count != 0 ? firing_count : 1)) +
+                             (lambda * weight));
+                        desired_edge_updates[i][j].second++;
                     }
                 }
             }
@@ -243,15 +264,19 @@ int main(int argc, char* argv[]) {
 
                 for (size_t j = 0; j < node->incoming.size(); j++) {
                     Edge* e = node->incoming[j];
-                    if (desired_edge_updates[i][j].second != 0 &&
-                        e->get(weight_idx) > -255 && e->get(weight_idx) < 255) {
-                        int new_weight = (int)e->get(weight_idx) +
-                                         desired_edge_updates[i][j].first /
-                                             desired_edge_updates[i][j].second;
-                        if (new_weight < -255) {
-                            new_weight = -255;
-                        } else if (new_weight > 255) {
-                            new_weight = 255;
+                    if (desired_edge_updates[i][j].second != 0) {
+                        double new_weight =
+                            e->get(weight_idx) +
+                            desired_edge_updates[i][j].first /
+                                desired_edge_updates[i][j].second;
+                        if (desired_edge_updates[i][j].first /
+                                desired_edge_updates[i][j].second >
+                            0.000001) {
+                            // fprintf(stderr, "%f + %f = %f\n",
+                            //         e->get(weight_idx),
+                            //         desired_edge_updates[i][j].first /
+                            //             desired_edge_updates[i][j].second,
+                            //         new_weight);
                         }
                         e->set(weight_idx, new_weight);
                     }

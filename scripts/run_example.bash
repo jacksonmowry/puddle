@@ -9,4 +9,4 @@ else
     data_dir='datasets/quadrant'
 fi
 
-bin/classify <(bin/generate_reservoir -p 0.15 -f 20 -c 4 -o 0.2 | framework-open/bin/network_tool) "${data_dir}"/data.csv "${data_dir}"/labels.csv
+bin/classify <(bin/generate_reservoir -s 250 -p 0.8 -f 20 -c 4 -o 0.3 | framework-open/bin/network_tool) "${data_dir}"/data.csv "${data_dir}"/labels.csv 0.00000001 0.001

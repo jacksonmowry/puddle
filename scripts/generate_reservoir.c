@@ -24,16 +24,25 @@ typedef struct Neuron {
 
 const char* empty_network =
     "{\"Associated_Data\":{\"other\":{\"proc_name\":\"risp\"},\"proc_params\":{"
-    "\"discrete\":true,\"leak_mode\":\"configurable\",\"spike_value_factor\":255,\"max_delay\":15,\"max_"
-    "threshold\":1073741824,\"max_weight\":255,\"min_potential\":-1073741825,\"min_threshold\":"
-    "1,\"min_weight\":-255}},\"Edges\":[],\"Inputs\":[],\"Network_Values\":[],"
+    "\"discrete\":false,\"leak_mode\":\"configurable\",\"spike_value_factor\":"
+    "1.0,\"max_delay\":15,\"max_"
+    "threshold\":1073741824,\"max_weight\":1.0,\"min_potential\":-1073741825,"
+    "\"min_threshold\":"
+    "1,\"min_weight\":-1.0}},\"Edges\":[],\"Inputs\":[],\"Network_Values\":[],"
     "\"Nodes\":[],\"Outputs\":[],\"Properties\":{\"edge_properties\":[{"
     "\"index\":1,\"max_value\":15,\"min_value\":1,\"name\":\"Delay\",\"size\":"
-    "1,\"type\":73},{\"index\":0,\"max_value\":255,\"min_value\":-255,\"name\":"
-    "\"Weight\",\"size\":1,\"type\":73}],\"network_properties\":[],\"node_"
-    "properties\":[{\"index\":0,\"max_value\":1073741824,\"min_value\":1,\"name\":"
-    "\"Threshold\",\"size\":1,\"type\":73},{\"index\":1,\"max_value\":1,\"min_value\":0,\"name\":"
+    "1,\"type\":73},{\"index\":0,\"max_value\":1.0,\"min_value\":-1.0,\"name\":"
+    "\"Weight\",\"size\":1,\"type\":68}],\"network_properties\":[],\"node_"
+    "properties\":[{\"index\":0,\"max_value\":1073741824,\"min_value\":1,"
+    "\"name\":"
+    "\"Threshold\",\"size\":1,\"type\":68},{\"index\":1,\"max_value\":1,\"min_"
+    "value\":0,\"name\":"
     "\"Leak\",\"size\":1,\"type\":66}]}}";
+
+double random_double(double min, double max) {
+    double scale = rand() / (double)RAND_MAX;
+    return min + scale * (max - min);
+}
 
 int main(int argc, char* argv[]) {
     size_t resevoir_size = 100;
@@ -210,14 +219,13 @@ int main(int argc, char* argv[]) {
     }
     printf("\n");
 
-    printf("SNP_ALL Leak 1\n");
+    printf("SNP_ALL Leak 0\n");
 
-    for (size_t i = 0; i < feature_neurons + resevoir_size;
-         i++) {
-        printf("SNP %zu Threshold %d\n", i, rand() % 255 + 1);
+    for (size_t i = 0; i < feature_neurons + resevoir_size; i++) {
+        printf("SNP %zu Threshold %f\n", i, 1.0);
     }
-    for (size_t i = feature_neurons + resevoir_size; i < feature_neurons + resevoir_size + class_neurons;
-         i++) {
+    for (size_t i = feature_neurons + resevoir_size;
+         i < feature_neurons + resevoir_size + class_neurons; i++) {
         printf("SNP %zu Threshold %d\n", i, 1073741824);
         printf("SNP %zu Leak %d\n", i, 0);
     }
@@ -230,8 +238,8 @@ int main(int argc, char* argv[]) {
             }
 
             printf("AE %zu %zu\n", i, feature_neurons + j);
-            printf("SEP %zu %zu Weight %d\n", i, feature_neurons + j,
-                   (((rand() % 2) * 2) - 1) * rand() % 256);
+            printf("SEP %zu %zu Weight %f\n", i, feature_neurons + j,
+                   random_double(-1, 1));
             printf("SEP %zu %zu Delay %d\n", i, feature_neurons + j,
                    rand() % 15 + 1);
         }
@@ -243,8 +251,7 @@ int main(int argc, char* argv[]) {
             size_t pre = feature_neurons + i;
             size_t post = feature_neurons + neurons[i].connections[j];
             printf("AE %zu %zu\n", pre, post);
-            printf("SEP %zu %zu Weight %d\n", pre, post,
-                   (((rand() % 2) * 2) - 1) * rand() % 256);
+            printf("SEP %zu %zu Weight %f\n", pre, post, random_double(-1, 1));
             printf("SEP %zu %zu Delay %d\n", pre, post, rand() % 15 + 1);
         }
     }
@@ -258,8 +265,8 @@ int main(int argc, char* argv[]) {
             }
 
             printf("AE %zu %zu\n", feature_neurons + j, i);
-            printf("SEP %zu %zu Weight %d\n", feature_neurons + j, i,
-                   (((rand() % 2) * 2) - 1) * rand() % 256);
+            printf("SEP %zu %zu Weight %f\n", feature_neurons + j, i,
+                   random_double(-1, 1));
             printf("SEP %zu %zu Delay %d\n", feature_neurons + j, i,
                    rand() % 15 + 1);
         }
