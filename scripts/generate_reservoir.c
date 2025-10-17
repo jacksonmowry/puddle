@@ -266,7 +266,7 @@ int main(int argc, char* argv[]) {
 
             printf("AE %zu %zu\n", feature_neurons + j, i);
             printf("SEP %zu %zu Weight %f\n", feature_neurons + j, i,
-                   random_double(-1, 1));
+                   random_double(-0.1, 0.1));
             printf("SEP %zu %zu Delay %d\n", feature_neurons + j, i,
                    rand() % 15 + 1);
         }

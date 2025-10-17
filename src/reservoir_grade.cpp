@@ -1,9 +1,11 @@
 #include "framework.hpp"
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
+#include <pthread.h>
 #include <stddef.h>
 #include <string>
 #include <unistd.h>
@@ -22,46 +24,76 @@ struct obs {
     double count;
 };
 
-Network* load_network(Processor** pp, const json& network_json) {
-    Network* net;
-    json proc_params;
-    string proc_name;
-    Processor* p;
+struct observation {
+    vector<double> features;
+    int label;
+};
 
-    net = new Network();
-    net->from_json(network_json);
+vector<observation> dataset;
+atomic_size_t dataset_idx = 0;
 
-    p = *pp;
-    if (p == nullptr) {
-        proc_params = net->get_data("proc_params");
-        proc_name = net->get_data("other")["proc_name"];
-        p = Processor::make(proc_name, proc_params);
-        *pp = p;
+pthread_mutex_t in_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t out_mutex = PTHREAD_MUTEX_INITIALIZER;
+vector<atom> outputs;
+
+fstream data_file;
+fstream labels;
+
+void* worker(void* arg) {
+    Network* n = (Network*)arg;
+    Processor* p = nullptr;
+
+    json proc_params = n->get_data("proc_params");
+    string proc_name = n->get_data("other")["proc_name"];
+
+    p = Processor::make(proc_name, proc_params);
+    p->load_network(n);
+
+    while (true) {
+        p->clear_activity();
+
+        size_t idx = dataset_idx++;
+        if (idx > dataset.size() - 1) {
+            break;
+        }
+
+        observation o = dataset[idx];
+        for (size_t i = 0; i < o.features.size(); i++) {
+            // int idx = 2 * i + ((int)o.features[i] / 50);
+            int idx = 10 * i + ((int)o.features[i] / 10);
+            p->apply_spike({idx, 0, 255}, false);
+
+            idx++;
+        }
+
+        p->run(200);
+
+        vector<int> output_counts = p->neuron_counts();
+
+        const int num_outputs = n->num_outputs();
+        Node* node =
+            n->sorted_node_vector[n->sorted_node_vector.size() - num_outputs];
+        atom a;
+        a.label = o.label - 1;
+        for (size_t i = 0; i < node->incoming.size(); i++) {
+            uint32_t id = node->incoming[i]->from->id;
+            a.v.push_back(output_counts[id]);
+        }
+
+        pthread_mutex_lock(&out_mutex);
+        outputs.push_back(a);
+        pthread_mutex_unlock(&out_mutex);
     }
 
-    if (p->get_network_properties().as_json() !=
-        net->get_properties().as_json()) {
-        fprintf(stderr,
-                "%s: load_network: Network and processor properties do not "
-                "match.\n",
-                __FILE__);
-        return nullptr;
-    }
-
-    if (!p->load_network(net)) {
-        fprintf(stderr, "%s: load_network: Failed to load network.\n",
-                __FILE__);
-        return nullptr;
-    }
-
-    return net;
+    return nullptr;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
-        fprintf(stderr,
-                "usage: %s starting_resevoir.json data.csv labels.csv\n",
-                argv[0]);
+    if (argc != 5) {
+        fprintf(
+            stderr,
+            "usage: %s starting_resevoir.json data.csv labels.csv threads\n",
+            argv[0]);
         exit(1);
     }
 
@@ -77,63 +109,69 @@ int main(int argc, char* argv[]) {
     fstream data(argv[2]);
     fstream labels(argv[3]);
 
-    vector<atom> outputs;
+    string line;
 
-    const size_t num_outputs = n->num_outputs();
-    bool done = false;
-
-    Processor* p = nullptr;
-
-    json proc_params = n->get_data("proc_params");
-    string proc_name = n->get_data("other")["proc_name"];
-    p = Processor::make(proc_name, proc_params);
-    p->load_network(n);
-
-    if (!n) {
-        fprintf(stderr, "%s: main: Unable to load network.\n", __FILE__);
-    }
-    n->make_sorted_node_vector();
-
-    while (!data.eof()) {
-        p->clear_activity();
-        string line;
+    while (!data.eof() && !labels.eof()) {
         getline(data, line);
-
-        int data;
-        int idx = 0;
         if (line.length() == 0) {
             break;
         }
-        stringstream ss(line);
-        while (ss >> data) {
-            p->apply_spike({10 * idx + data / 10, 0, 255}, false);
 
-            idx++;
+        dataset.push_back({});
+
+        stringstream ss(line);
+        double data;
+        while (ss >> data) {
+            dataset.back().features.push_back(data);
         }
 
-        p->run(100);
-
-        vector<int> output_counts = p->neuron_counts();
         int label;
         labels >> label;
-        label -= 1;
 
-        const int num_outputs = n->num_outputs();
-        Node* node =
-            n->sorted_node_vector[n->sorted_node_vector.size() - num_outputs];
-        atom a;
-        a.label = label;
-        for (size_t i = 0; i < node->incoming.size(); i++) {
-            uint32_t id = node->incoming[i]->from->id;
-            a.v.push_back(output_counts[id]);
-        }
+        dataset.back().label = label;
+    }
 
-        outputs.push_back(a);
+    size_t thread_count;
+    sscanf(argv[4], "%zu", &thread_count);
+
+    const size_t num_outputs = n->num_outputs();
+    bool done = false;
+    n->make_sorted_node_vector();
+
+    // SETUP Thread pool
+    pthread_t* threads = (pthread_t*)calloc(thread_count, sizeof(pthread_t));
+    for (std::size_t i = 0; i < thread_count; i++) {
+        pthread_create(threads + i, nullptr, worker, n);
+    }
+
+    for (std::size_t i = 0; i < thread_count; i++) {
+        pthread_join(threads[i], nullptr);
     }
 
     vector<vector<obs>> dunn(4, vector<obs>(4));
+    size_t total_zeros = 0;
 
     for (size_t i = 0; i < outputs.size(); i++) {
+        printf("%d: [", outputs[i].label);
+        for (size_t j = 0; j < outputs[i].v.size(); j++) {
+            printf("%2d", outputs[i].v[j]);
+
+            if (j != outputs[i].v.size() - 1) {
+                printf(", ");
+            }
+        }
+        printf("]\n");
+        size_t zeros = 0;
+
+        for (auto a : outputs[i].v) {
+            zeros += a == 0;
+        }
+
+        if (zeros == outputs[i].v.size()) {
+            total_zeros++;
+            continue;
+        }
+
         for (size_t j = 0; j < outputs.size(); j++) {
             if (i == j) {
                 continue;
@@ -146,13 +184,11 @@ int main(int argc, char* argv[]) {
             double b_norm = 0;
             for (size_t k = 0; k < a.v.size(); k++) {
                 dot += a.v[k] * b.v[k];
-                a_norm += a.v[k] * a.v[k];
-                b_norm += b.v[k] * b.v[k];
+                a_norm += pow(a.v[k], 2);
+                b_norm += pow(b.v[k], 2);
             }
 
-            fprintf(stderr, "%f\n", acos(dot / (sqrt(a_norm) * sqrt(b_norm))));
-            dunn[a.label][b.label].total +=
-                acos(dot / (sqrt(a_norm) * sqrt(b_norm)));
+            dunn[a.label][b.label].total += dot / (sqrt(a_norm) * sqrt(b_norm));
             dunn[a.label][b.label].count++;
         }
     }
@@ -164,4 +200,5 @@ int main(int argc, char* argv[]) {
         puts("");
     }
     puts("");
+    printf("Total zeros: %zu/%zu\n", total_zeros, outputs.size());
 }

@@ -15,10 +15,10 @@ framework-open/lib/libframework.a:
 	(cd framework-open; make -j4)
 
 framework-open/obj/risp.o:
-	(cd framework-open; make -j4)
+	(cd framework-open)
 
 framework-open/obj/risp_static.o:
-	(cd framework-open; make -j4)
+	(cd framework-open)
 
 clean:
 	rm bin/*; (cd framework-open; make clean)
