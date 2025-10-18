@@ -24,15 +24,19 @@ typedef struct Neuron {
 
 const char* empty_network =
     "{\"Associated_Data\":{\"other\":{\"proc_name\":\"risp\"},\"proc_params\":{"
-    "\"discrete\":true,\"leak_mode\":\"configurable\",\"spike_value_factor\":255,\"max_delay\":15,\"max_"
-    "threshold\":1073741824,\"max_weight\":255,\"min_potential\":-1073741825,\"min_threshold\":"
+    "\"discrete\":true,\"leak_mode\":\"configurable\",\"spike_value_factor\":"
+    "255,\"max_delay\":15,\"max_"
+    "threshold\":255,\"max_weight\":255,\"min_potential\":-255,"
+    "\"min_threshold\":"
     "1,\"min_weight\":-255}},\"Edges\":[],\"Inputs\":[],\"Network_Values\":[],"
     "\"Nodes\":[],\"Outputs\":[],\"Properties\":{\"edge_properties\":[{"
     "\"index\":1,\"max_value\":15,\"min_value\":1,\"name\":\"Delay\",\"size\":"
     "1,\"type\":73},{\"index\":0,\"max_value\":255,\"min_value\":-255,\"name\":"
     "\"Weight\",\"size\":1,\"type\":73}],\"network_properties\":[],\"node_"
-    "properties\":[{\"index\":0,\"max_value\":1073741824,\"min_value\":1,\"name\":"
-    "\"Threshold\",\"size\":1,\"type\":73},{\"index\":1,\"max_value\":1,\"min_value\":0,\"name\":"
+    "properties\":[{\"index\":0,\"max_value\":255,\"min_value\":1,"
+    "\"name\":"
+    "\"Threshold\",\"size\":1,\"type\":73},{\"index\":1,\"max_value\":1,\"min_"
+    "value\":0,\"name\":"
     "\"Leak\",\"size\":1,\"type\":66}]}}";
 
 int main(int argc, char* argv[]) {
@@ -212,13 +216,12 @@ int main(int argc, char* argv[]) {
 
     printf("SNP_ALL Leak 1\n");
 
-    for (size_t i = 0; i < feature_neurons + resevoir_size;
-         i++) {
+    for (size_t i = 0; i < feature_neurons + resevoir_size; i++) {
         printf("SNP %zu Threshold %d\n", i, rand() % 255 + 1);
     }
-    for (size_t i = feature_neurons + resevoir_size; i < feature_neurons + resevoir_size + class_neurons;
-         i++) {
-        printf("SNP %zu Threshold %d\n", i, 1073741824);
+    for (size_t i = feature_neurons + resevoir_size;
+         i < feature_neurons + resevoir_size + class_neurons; i++) {
+        printf("SNP %zu Threshold %d\n", i, rand() % 255 + 1);
         printf("SNP %zu Leak %d\n", i, 0);
     }
 

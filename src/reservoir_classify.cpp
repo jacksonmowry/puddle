@@ -1,10 +1,13 @@
 #include "framework.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
+#include <pthread.h>
 #include <stddef.h>
 #include <string>
 #include <unistd.h>
@@ -14,26 +17,12 @@ using namespace std;
 using namespace neuro;
 using nlohmann::json;
 
+struct Observation {
+    vector<double> x;
+    int y;
+};
+
 void softmax(vector<double>& x) {
-    double min = 999999999;
-    double max = -999999999;
-    for (double d : x) {
-        if (d < min) {
-            min = d;
-        }
-        if (d > max) {
-            max = d;
-        }
-    }
-
-    for (double& d : x) {
-        // TODO evaluate if we even want negative charges in our output layer
-        // if (d < 0) {
-        //     d = 0;
-        // }
-        d /= max;
-    }
-
     double exp_sum = 0;
     for (double a : x) {
         exp_sum += exp(a);
@@ -58,45 +47,80 @@ int max_element(const vector<double>& x) {
     return max_idx;
 }
 
-Network* load_network(Processor** pp, const json& network_json) {
-    Network* net;
-    json proc_params;
-    string proc_name;
-    Processor* p;
+vector<Observation> processed_data;
+vector<Observation> dataset;
+atomic_size_t idx = 0;
+json d_min;
+json d_max;
+size_t num_bins;
 
-    net = new Network();
-    net->from_json(network_json);
+void* worker(void* arg) {
+    Network* n = (Network*)arg;
 
-    p = *pp;
-    if (p == nullptr) {
-        proc_params = net->get_data("proc_params");
-        proc_name = net->get_data("other")["proc_name"];
-        p = Processor::make(proc_name, proc_params);
-        *pp = p;
+    const int weight_idx = n->get_edge_property("Weight")->index;
+
+    Processor* p = nullptr;
+
+    json proc_params = n->get_data("proc_params");
+    string proc_name = n->get_data("other")["proc_name"];
+    p = Processor::make(proc_name, proc_params);
+    p->load_network(n);
+
+    if (!n) {
+        fprintf(stderr, "%s: main: Unable to load network.\n", __FILE__);
+    }
+    n->make_sorted_node_vector();
+    const size_t num_outputs = n->num_outputs();
+
+    while (true) {
+        size_t work_idx = idx++;
+
+        if (work_idx >= dataset.size()) {
+            break;
+        }
+
+        Observation o = dataset[work_idx];
+
+        p->clear_activity();
+
+        for (size_t i = 0; i < o.x.size(); i++) {
+            const double encoder_range =
+                (double)d_max.at(i) - (double)d_min.at(i);
+            const double bin_width = encoder_range / num_bins;
+            const double bin =
+                min(floor((o.x[i] - (double)d_min.at(i)) / bin_width),
+                    (double)num_bins - 1);
+            const int idx = (num_bins * i) + bin;
+
+            fprintf(stderr, "Min: %f, Max: %f, X: %f, Bin: %f, idx: %d\n",
+                    (double)d_min.at(i), (double)d_max.at(i), o.x[i], bin, idx);
+
+            p->apply_spike({idx, 0, 255}, false);
+        }
+
+        p->run(100);
+
+        // 1 for bias
+        processed_data[work_idx].x.push_back(1);
+        vector<int> output_counts = p->output_counts();
+        for (int a : output_counts) {
+            processed_data[work_idx].x.push_back(a / (double)100);
+        }
+
+        processed_data[work_idx].y = o.y;
     }
 
-    if (p->get_network_properties().as_json() !=
-        net->get_properties().as_json()) {
-        fprintf(stderr,
-                "%s: load_network: Network and processor properties do not "
-                "match.\n",
-                __FILE__);
-        return nullptr;
-    }
+    delete p;
 
-    if (!p->load_network(net)) {
-        fprintf(stderr, "%s: load_network: Failed to load network.\n",
-                __FILE__);
-        return nullptr;
-    }
-
-    return net;
+    return nullptr;
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 4) {
+    if (argc != 12) {
         fprintf(stderr,
-                "usage: %s starting_resevoir.json data.csv labels.csv\n",
+                "usage: %s starting_resevoir.json data.csv labels.csv "
+                "learning_rate num_threads epochs lambda [d_min] [d_max] "
+                "num_bins num_classes\n",
                 argv[0]);
         exit(1);
     }
@@ -107,168 +131,192 @@ int main(int argc, char* argv[]) {
     ifstream fin(argv[1]);
     fin >> network_json;
 
+    fstream data(argv[2]);
+    fstream labels(argv[3]);
+
+    while (!data.eof()) {
+        string line;
+        getline(data, line);
+
+        double data;
+        int idx = 0;
+        if (line.length() == 0) {
+            break;
+        }
+        stringstream ss(line);
+        dataset.push_back({});
+        while (ss >> data) {
+            dataset.back().x.push_back(data);
+        }
+
+        labels >> dataset.back().y;
+    }
+
+    double learning_rate;
+    sscanf(argv[4], "%lf", &learning_rate);
+
+    size_t num_threads;
+    sscanf(argv[5], "%zu", &num_threads);
+
+    size_t total_epochs;
+    sscanf(argv[6], "%zu", &total_epochs);
+
+    double lambda;
+    sscanf(argv[7], "%lf", &lambda);
+
+    stringstream dmin(argv[8]);
+    dmin >> d_min;
+    stringstream dmax(argv[9]);
+    dmax >> d_max;
+    d_max.at(0);
+    d_max.at(1);
+
+    sscanf(argv[10], "%zu", &num_bins);
+
+    size_t num_classes;
+    sscanf(argv[11], "%zu", &num_classes);
+
     Network* n = new Network();
     n->from_json(network_json);
     const int weight_idx = n->get_edge_property("Weight")->index;
 
-    for (size_t epochs = 0; epochs < 100; epochs++) {
-        printf("Epoch %zu:\n", epochs);
-        fstream data(argv[2]);
-        fstream labels(argv[3]);
+    Processor* p = nullptr;
 
-        const size_t num_outputs = n->num_outputs();
-        vector<vector<int>> conf(num_outputs, vector<int>(num_outputs, 0));
+    json proc_params = n->get_data("proc_params");
+    string proc_name = n->get_data("other")["proc_name"];
+    p = Processor::make(proc_name, proc_params);
+    p->load_network(n);
+
+    if (!n) {
+        fprintf(stderr, "%s: main: Unable to load network.\n", __FILE__);
+    }
+    n->make_sorted_node_vector();
+    const size_t num_outputs = n->num_outputs();
+
+    processed_data.resize(dataset.size());
+
+    fprintf(stderr, "Preprocessing dataset\n");
+
+    pthread_t* threads = (pthread_t*)calloc(num_threads, sizeof(*threads));
+
+    for (size_t i = 0; i < num_threads; i++) {
+        pthread_create(threads + i, nullptr, worker, n);
+    }
+
+    for (size_t i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], nullptr);
+    }
+
+    vector<vector<int>> conf(num_classes, vector<int>(num_classes, 0));
+    vector<vector<pair<double, int>>> desired_edge_updates(
+        num_classes, vector<pair<double, int>>(num_outputs + 1));
+
+    MOA m;
+    m.Seed(m.Seed_From_Time(), "rand");
+    vector<vector<double>> w(num_classes, vector<double>(num_outputs + 1));
+    for (size_t i = 0; i < w.size(); i++) {
+        for (size_t j = 0; j < w[i].size(); j++) {
+            w[i][j] = m.Random_Normal(0, 10);
+        }
+    }
+
+    unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+
+    for (size_t epochs = 0; epochs < total_epochs; epochs++) {
+        printf("Epoch %zu:\n", epochs);
+        shuffle(processed_data.begin(), processed_data.end(),
+                std::default_random_engine(seed));
+
         double loss = 0;
         size_t correct = 0;
         size_t total = 0;
 
-        const size_t batch_size = 70;
+        const size_t batch_size = 10;
 
-        // Batch loop
-        // TODO we should read in all data ahead of time (if ram usage isn't
-        // that big of a deal)
-        //      then we can avoid this while (true) loop and just use a
-        //      calculated number of batches
-        bool done = false;
-        while (true) {
-            if (done) {
-                break;
-            }
-            size_t batch_samples = 0;
-            vector<vector<pair<int, int>>> desired_edge_updates(
-                n->num_outputs());
-            for (size_t i = 0; i < desired_edge_updates.size(); i++) {
-                Node* node = n->get_output(i);
+        for (size_t batch = 0; batch < processed_data.size() / batch_size;
+             batch++) {
+            printf("\0331k\rBatch: %zu/%zu", batch + 1,
+                   processed_data.size() / batch_size);
 
-                desired_edge_updates[i].resize(node->incoming.size());
-            }
+            for (size_t idx = 0; idx < batch_size; idx++) {
+                size_t work_idx = (batch * batch_size) + idx;
+                Observation o = processed_data[work_idx];
 
-            Processor* p = nullptr;
+                // Wx + b = y
+                vector<double> y(num_classes);
 
-            json proc_params = n->get_data("proc_params");
-            string proc_name = n->get_data("other")["proc_name"];
-            p = Processor::make(proc_name, proc_params);
-            p->load_network(n);
-            // track_all_neuron_events(p, n);
-
-            if (!n) {
-                fprintf(stderr, "%s: main: Unable to load network.\n",
-                        __FILE__);
-            }
-            n->make_sorted_node_vector();
-
-            while (!data.eof()) {
-                batch_samples++;
-
-                if (batch_samples > batch_size) {
-                    break;
-                }
-                p->clear_activity();
-                string line;
-                getline(data, line);
-
-                int data;
-                int idx = 0;
-                if (line.length() == 0) {
-                    break;
-                }
-                stringstream ss(line);
-                while (ss >> data) {
-                    p->apply_spike({10 * idx + data / 10, 0, 255}, false);
-
-                    idx++;
+                for (size_t i = 0; i < num_classes; i++) {
+                    for (size_t j = 0; j < num_outputs + 1; j++) {
+                        y[i] += w[i][j] * o.x[j];
+                    }
                 }
 
-                p->run(100);
+                // Now we softmax y
+                softmax(y);
 
-                vector<double> output_charges = p->neuron_charges();
-                vector<int> output;
-                for (size_t i = 0; i < n->num_outputs(); i++) {
-                    output.push_back(output_charges[output_charges.size() -
-                                                    n->num_outputs() + i]);
-                }
-                vector<double> softmax_out(output.size());
-                vector<double> target(output.size(), 0);
+                loss += -log(y[o.y]);
+                vector<double> target(num_classes);
+                target[o.y] = 1;
 
-                labels >> data;
-                const int target_class = data - 1;
-                target[target_class] = 1;
-                transform(output.begin(), output.end(), softmax_out.begin(),
-                          [](int x) { return (double)x; });
-
-                softmax(softmax_out);
-                int predicted_class = max_element(softmax_out);
-
-                conf[target_class][predicted_class]++;
-                if (predicted_class == data - 1) {
+                if (max_element(y) == o.y) {
                     correct++;
                 }
                 total++;
 
-                double target_loss = -log(softmax_out[target_class]);
-                loss += target_loss;
+                conf[o.y][max_element(y)]++;
 
-                // Loop through each output neuron and make weight updates
-                size_t updates = 0;
-                for (size_t i = 0; i < softmax_out.size(); i++) {
-                    Node* node = n->get_output(i);
-
-                    for (size_t j = 0; j < node->incoming.size(); j++) {
-                        Edge* e = node->incoming[j];
-                        size_t firing_count = p->neuron_counts()[e->from->id];
-                        int weight = (int)e->get(weight_idx);
-                        double neuron_loss = target[i] - softmax_out[i];
-                        int weight_delta = 15 * neuron_loss * firing_count;
-                        if (weight_delta != 0) {
-                            if (epochs < 5) {
-                                desired_edge_updates[i][j].first +=
-                                    weight_delta;
-                                desired_edge_updates[i][j].second++;
-                            } else if (abs(neuron_loss) > 0.05) {
-                                desired_edge_updates[i][j].first +=
-                                    signbit(neuron_loss) ? -1 : 1;
-                                desired_edge_updates[i][j].second++;
-                            }
-                        }
+                // Calculate weight updates
+                for (size_t i = 0; i < num_classes; i++) {
+                    for (size_t j = 0; j < num_outputs + 1; j++) {
+                        double gradient = (y[i] - target[i]) * o.x[j];
+                        desired_edge_updates[i][j].first -=
+                            learning_rate * gradient + (lambda * w[i][j]);
+                        desired_edge_updates[i][j].second++;
                     }
                 }
             }
-            if (data.eof()) {
-                done = true;
-            }
-            delete (p);
 
-            for (size_t i = 0; i < num_outputs; i++) {
-                Node* node = n->get_output(i);
+            // Perform batchwise weight updates
+            for (size_t i = 0; i < desired_edge_updates.size(); i++) {
+                for (size_t j = 0; j < desired_edge_updates[i].size(); j++) {
+                    double update = desired_edge_updates[i][j].first /
+                                    desired_edge_updates[i][j].second;
 
-                for (size_t j = 0; j < node->incoming.size(); j++) {
-                    Edge* e = node->incoming[j];
-                    if (desired_edge_updates[i][j].second != 0 &&
-                        e->get(weight_idx) > -255 && e->get(weight_idx) < 255) {
-                        int new_weight = (int)e->get(weight_idx) +
-                                         desired_edge_updates[i][j].first /
-                                             desired_edge_updates[i][j].second;
-                        if (new_weight < -255) {
-                            new_weight = -255;
-                        } else if (new_weight > 255) {
-                            new_weight = 255;
-                        }
-                        e->set(weight_idx, new_weight);
+                    // Prevent adding nan or infinity
+                    if (isnormal(update)) {
+                        w[i][j] += update;
                     }
                 }
             }
         }
 
-        printf("CONFUSION MATRIX:\n");
-        for (size_t i = 0; i < num_outputs; i++) {
-            for (size_t j = 0; j < num_outputs; j++) {
-                printf("%4d ", conf[i][j]);
+        if (epochs == total_epochs - 1) {
+            printf("CONFUSION MATRIX:\n");
+            for (size_t i = 0; i < conf.size(); i++) {
+                for (size_t j = 0; j < conf[i].size(); j++) {
+                    printf("%4d ", conf[i][j]);
+                    conf[i][j] = 0;
+                }
+                puts("");
             }
             puts("");
         }
-        puts("");
+
+        for (size_t i = 0; i < conf.size(); i++) {
+            for (size_t j = 0; j < conf[i].size(); j++) {
+                conf[i][j] = 0;
+            }
+        }
 
         printf("Accuracy: %.2f, Loss: %.2f\n", correct / (double)total,
                loss / (double)total);
+    }
+
+    printf("Final weight matrix:\n");
+    for (size_t i = 0; i < w.size(); i++) {
+        for (size_t j = 0; j < w[i].size(); j++) {
+            printf("%6.3f ", w[i][j]);
+        }
+        printf("\n");
     }
 }
