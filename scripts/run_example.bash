@@ -9,5 +9,21 @@ else
     data_dir='datasets/quadrant'
 fi
 
-# bin/classify <(bin/generate_reservoir -s 250 -p 0.9 -f 20 -c 16 -o 0.3 | framework-open/bin/network_tool) "${data_dir}"/data.csv "${data_dir}"/labels.csv 0.001 11 1000000
-bin/classify out.json "${data_dir}"/data.csv "${data_dir}"/labels.csv 0.025 11 50000 0.00000001 '[0, 0]' '[100, 100]' 10 4
+learning_rate=0.025
+cpu_threads=$(nproc)
+epochs=1000000
+lambda=0.00000001
+num_bins=10
+
+data_range=$(bin/data_preprocessing <${data_dir}/data.csv)
+label_count=$(sort -n <${data_dir}/labels.csv | uniq | wc -l)
+bin/classify out.json \
+    "${data_dir}"/data.csv \
+    "${data_dir}"/labels.csv \
+    ${learning_rate} \
+    ${cpu_threads} \
+    ${epochs} \
+    ${lambda} \
+    $(grep 'Min' <<<${data_range} | awk '{print $2}') \
+    $(grep 'Max' <<<${data_range} | awk '{print $2}') \
+    ${num_bins} "${label_count}"

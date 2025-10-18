@@ -39,6 +39,11 @@ vector<atom> outputs;
 fstream data_file;
 fstream labels;
 
+json d_min;
+json d_max;
+size_t num_bins;
+size_t num_classes;
+
 void* worker(void* arg) {
     Network* n = (Network*)arg;
     Processor* p = nullptr;
@@ -59,17 +64,21 @@ void* worker(void* arg) {
 
         observation o = dataset[idx];
         for (size_t i = 0; i < o.features.size(); i++) {
-            // int idx = 2 * i + ((int)o.features[i] / 50);
-            int idx = 10 * i + ((int)o.features[i] / 10);
-            p->apply_spike({idx, 0, 255}, false);
+            const double encoder_range =
+                (double)d_max.at(i) - (double)d_min.at(i);
+            const double bin_width = encoder_range / num_bins;
+            const double bin =
+                min(floor((o.features[i] - (double)d_min.at(i)) / bin_width),
+                    (double)num_bins - 1);
+            const int idx = (num_bins * i) + bin;
 
-            idx++;
+            p->apply_spike({idx, 0, 255}, false);
         }
 
         p->run(100);
 
         atom a;
-        a.label = o.label - 1;
+        a.label = o.label;
         a.v = p->output_counts();
 
         pthread_mutex_lock(&out_mutex);
@@ -81,11 +90,11 @@ void* worker(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc != 5) {
-        fprintf(
-            stderr,
-            "usage: %s starting_resevoir.json data.csv labels.csv threads\n",
-            argv[0]);
+    if (argc != 9) {
+        fprintf(stderr,
+                "usage: %s starting_resevoir.json data.csv labels.csv threads "
+                "[d_min] [d_max] num_bins num_classes\n",
+                argv[0]);
         exit(1);
     }
 
@@ -126,6 +135,15 @@ int main(int argc, char* argv[]) {
     size_t thread_count;
     sscanf(argv[4], "%zu", &thread_count);
 
+    stringstream dmin(argv[5]);
+    dmin >> d_min;
+    stringstream dmax(argv[6]);
+    dmax >> d_max;
+
+    sscanf(argv[7], "%zu", &num_bins);
+
+    sscanf(argv[8], "%zu", &num_classes);
+
     const size_t num_outputs = n->num_outputs();
     bool done = false;
     n->make_sorted_node_vector();
@@ -140,19 +158,19 @@ int main(int argc, char* argv[]) {
         pthread_join(threads[i], nullptr);
     }
 
-    vector<vector<obs>> dunn(4, vector<obs>(4));
+    vector<vector<obs>> dunn(num_classes, vector<obs>(num_classes));
     size_t total_zeros = 0;
 
     for (size_t i = 0; i < outputs.size(); i++) {
-        printf("%d: [", outputs[i].label);
-        for (size_t j = 0; j < outputs[i].v.size(); j++) {
-            printf("%2d", outputs[i].v[j]);
+        // printf("%d: [", outputs[i].label);
+        // for (size_t j = 0; j < outputs[i].v.size(); j++) {
+        //     printf("%2d", outputs[i].v[j]);
 
-            if (j != outputs[i].v.size() - 1) {
-                printf(", ");
-            }
-        }
-        printf("]\n");
+        //     if (j != outputs[i].v.size() - 1) {
+        //         printf(", ");
+        //     }
+        // }
+        // printf("]\n");
         size_t zeros = 0;
 
         for (auto a : outputs[i].v) {
@@ -185,12 +203,43 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    vector<vector<double>> vals(num_classes, vector<double>(num_classes));
+
     for (size_t i = 0; i < dunn.size(); i++) {
         for (size_t j = 0; j < dunn[i].size(); j++) {
+            vals[i][j] = dunn[i][j].total / dunn[i][j].count;
             printf("%10.3f ", dunn[i][j].total / dunn[i][j].count);
         }
         puts("");
     }
     puts("");
     printf("Total zeros: %zu/%zu\n", total_zeros, outputs.size());
+
+    bool valid = true;
+
+    // Calculate the smallest delta between each class and the others
+    for (size_t i = 0; i < vals.size(); i++) {
+        double smallest = 1;
+        double target = vals[i][i];
+
+        for (size_t j = 0; j < vals.size(); j++) {
+            if (i == j) {
+                continue;
+            }
+
+            if (target - vals[i][j] < smallest) {
+                smallest = target - vals[i][j];
+            }
+        }
+
+        if (smallest < 0) {
+            valid = false;
+        }
+
+        printf("Class %d smallest delta %f\n", (int)i+1, smallest);
+    }
+
+    if (!valid) {
+        printf("INVALID RESERVOIR\n");
+    }
 }

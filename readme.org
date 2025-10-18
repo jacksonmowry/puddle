@@ -2,5 +2,17 @@
 
 * Running
 1. Run =make=
-2. Run =bash scripts/run_example.bash=
-3. That's it
+2. Run =bash scripts/calculate_grade.bash [path to your dataset dir]=
+   - =bash scripts/calculate_grade.bash datasets/iris=
+   - We're looking for the last line to not say =INVALID RESERVOIR=
+   - We'd ideally like to see all of the =smallest delta= lines to be greater than or equal to 0.01. If you have one line that is less than 0.01 I would continue running until all lines are >= 0.01. We should probably just write a wrapper script that tries N number of reservoirs and picks the best one, decided by the largest group of smallest deltas.
+3. Run =bash scripts/run_example.bash [path to your dataset dir]=
+   - Currently variables have to be hard coded in the script
+
+* Dataset Prep
+- I didn't want to parse out commas so the dataset needs to have commas removed =sed -i 's/,/ /g' data.csv=, we can fix this or leave it.
+- Data labels need to be integers starting at 0. We can also adjust the code so this isn't necessary.
+
+* TODO
+- Test more datasets
+- Write a wrapper script that combines steps 2 & 3 from above, which generates an ideal reservoir and then trains it all in one go.

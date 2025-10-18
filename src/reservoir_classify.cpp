@@ -84,10 +84,16 @@ void* worker(void* arg) {
         p->clear_activity();
 
         for (size_t i = 0; i < o.x.size(); i++) {
-            const double encoder_range = (double)d_max.at(i) - (double)d_min.at(i);
+            const double encoder_range =
+                (double)d_max.at(i) - (double)d_min.at(i);
             const double bin_width = encoder_range / num_bins;
-            const double bin = floor((o.x[i]-(double)d_min.at(i)) / bin_width);
+            const double bin =
+                min(floor((o.x[i] - (double)d_min.at(i)) / bin_width),
+                    (double)num_bins - 1);
             const int idx = (num_bins * i) + bin;
+
+            fprintf(stderr, "Min: %f, Max: %f, X: %f, Bin: %f, idx: %d\n",
+                    (double)d_min.at(i), (double)d_max.at(i), o.x[i], bin, idx);
 
             p->apply_spike({idx, 0, 255}, false);
         }
@@ -132,7 +138,7 @@ int main(int argc, char* argv[]) {
         string line;
         getline(data, line);
 
-        int data;
+        double data;
         int idx = 0;
         if (line.length() == 0) {
             break;
@@ -144,7 +150,6 @@ int main(int argc, char* argv[]) {
         }
 
         labels >> dataset.back().y;
-        dataset.back().y -= 1;
     }
 
     double learning_rate;
