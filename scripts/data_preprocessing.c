@@ -8,11 +8,11 @@
 int main() {
     char buf[4096] = {0};
 
-    double mins[128];
-    double maxes[128];
+    double mins[256];
+    double maxes[256];
     size_t features = 0;
 
-    for (size_t i = 0; i < 128; i++) {
+    for (size_t i = 0; i < 256; i++) {
         mins[i] = DBL_MAX;
         maxes[i] = DBL_MIN;
     }
@@ -20,7 +20,7 @@ int main() {
     bool first = true;
     while (fgets(buf, sizeof(buf) - 1, stdin)) {
         size_t feature_idx = 0;
-        char* token = strtok(buf, " ");
+        char* token = strtok(buf, ", ");
         do {
             if (first) {
                 features++;
@@ -37,7 +37,7 @@ int main() {
             }
 
             feature_idx++;
-        } while ((token = strtok(NULL, " ")));
+        } while ((token = strtok(NULL, ", ")));
 
         first = false;
     }
@@ -46,7 +46,7 @@ int main() {
     for (size_t i = 0; i < features; i++) {
         printf("%f", mins[i]);
 
-        if (i != features-1) {
+        if (i != features - 1) {
             printf(",");
         }
     }
@@ -56,7 +56,7 @@ int main() {
     for (size_t i = 0; i < features; i++) {
         printf("%f", maxes[i]);
 
-        if (i != features-1) {
+        if (i != features - 1) {
             printf(",");
         }
     }
