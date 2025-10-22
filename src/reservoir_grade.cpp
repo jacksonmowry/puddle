@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
+#include <math.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <string>
@@ -67,9 +68,12 @@ void* worker(void* arg) {
             const double encoder_range =
                 (double)d_max.at(i) - (double)d_min.at(i);
             const double bin_width = encoder_range / num_bins;
-            const double bin = encoder_range == 0 ? 0 :
-                min(floor((o.features[i] - (double)d_min.at(i)) / bin_width),
-                    (double)num_bins - 1);
+            const double bin =
+                encoder_range == 0
+                    ? 0
+                    : min(floor((o.features[i] - (double)d_min.at(i)) /
+                                bin_width),
+                          (double)num_bins - 1);
             const int idx = (num_bins * i) + bin;
 
             p->apply_spike({idx, 0, 255}, false);
@@ -82,10 +86,11 @@ void* worker(void* arg) {
         a.v = p->output_counts();
 
         pthread_mutex_lock(&out_mutex);
-        outputs.push_back(std::move(a));
+        outputs.push_back(a);
         pthread_mutex_unlock(&out_mutex);
     }
 
+    delete p;
     return nullptr;
 }
 
@@ -159,6 +164,8 @@ int main(int argc, char* argv[]) {
         pthread_join(threads[i], nullptr);
     }
 
+    free(threads);
+
     vector<vector<obs>> dunn(num_classes, vector<obs>(num_classes));
     size_t total_zeros = 0;
 
@@ -193,13 +200,34 @@ int main(int argc, char* argv[]) {
             double dot = 0;
             double a_norm = 0;
             double b_norm = 0;
+            bool equal = true;
             for (size_t k = 0; k < a.v.size(); k++) {
-                dot += a.v[k] * b.v[k];
-                a_norm += pow(a.v[k], 2);
-                b_norm += pow(b.v[k], 2);
+                if (a.v[k] != b.v[k]) {
+                    equal = false;
+                }
+
+                if (a.v[k] == 0 || b.v[k] == 0) {
+                    // pass
+                } else {
+                    dot += a.v[k] * b.v[k];
+                }
+                if (a.v[k] != 0) {
+                    a_norm += pow(a.v[k], 2);
+                }
+                if (b.v[k] != 0) {
+                    b_norm += pow(b.v[k], 2);
+                }
             }
 
-            dunn[a.label][b.label].total += dot / (sqrt(a_norm) * sqrt(b_norm));
+            if (equal) {
+                dunn[a.label][b.label].total += 0;
+            } else if (a_norm != 0 && b_norm != 0) {
+                double val = dot / (sqrt(a_norm) * sqrt(b_norm));
+                dunn[a.label][b.label].total += acos(val);
+            } else {
+                dunn[a.label][b.label].total += 1;
+            }
+
             dunn[a.label][b.label].count++;
         }
     }
@@ -228,8 +256,8 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            if (target - vals[i][j] < smallest) {
-                smallest = target - vals[i][j];
+            if (abs(target - vals[i][j]) < smallest) {
+                smallest = abs(target - vals[i][j]);
             }
         }
 
@@ -237,10 +265,12 @@ int main(int argc, char* argv[]) {
             valid = false;
         }
 
-        printf("Class %d smallest delta %f\n", (int)i+1, smallest);
+        printf("Class %d smallest delta %f\n", (int)i + 1, smallest);
     }
 
     if (!valid) {
         printf("INVALID RESERVOIR\n");
     }
+
+    delete n;
 }
