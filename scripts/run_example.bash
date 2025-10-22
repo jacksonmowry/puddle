@@ -10,37 +10,37 @@ lambda=0.00000001
 num_bins=10
 input_file="best_reservoir.json"
 
-while getopts "dr:t:e:l:b:i:" opt; do
+while getopts "r:t:e:l:b:i:" opt; do
     case ${opt} in
-        r )
-            learning_rate=${OPTARG}
-            ;;
-        t )
-            cpu_threads=${OPTARG}
-            ;;
-        e )
-            epochs=${OPTARG}
-            ;;
-        l )
-            lambda=${OPTARG}
-            ;;
-        b )
-            num_bins=${OPTARG}
-            ;;
-        i )
-            input_file=${OPTARG}
-            ;;
-        \? )
-            echo "Usage: $0 [options] <data_directory>"
-            echo "Options:"
-            echo "  -r <learning_rate>     Learning rate (default: 0.025)"
-            echo "  -t <cpu_threads>       Number of CPU threads to use (default: number of processors)"
-            echo "  -e <epochs>            Number of training epochs (default: 1000000)"
-            echo "  -l <lambda>            Regularization parameter (default: 0.00000001)"
-            echo "  -b <num_bins>          Number of bins (default: 10)"
-            echo "  -i <input_file>        Input file (default: best_reservoir.json)"
-            exit 1
-            ;;
+    r)
+        learning_rate=${OPTARG}
+        ;;
+    t)
+        cpu_threads=${OPTARG}
+        ;;
+    e)
+        epochs=${OPTARG}
+        ;;
+    l)
+        lambda=${OPTARG}
+        ;;
+    b)
+        num_bins=${OPTARG}
+        ;;
+    i)
+        input_file=${OPTARG}
+        ;;
+    \?)
+        echo "Usage: $0 [options] <data_directory>"
+        echo "Options:"
+        echo "  -r <learning_rate>     Learning rate (default: 0.025)"
+        echo "  -t <cpu_threads>       Number of CPU threads to use (default: number of processors)"
+        echo "  -e <epochs>            Number of training epochs (default: 1000000)"
+        echo "  -l <lambda>            Regularization parameter (default: 0.00000001)"
+        echo "  -b <num_bins>          Number of bins (default: 10)"
+        echo "  -i <input_file>        Input file (default: best_reservoir.json)"
+        exit 1
+        ;;
     esac
 done
 

@@ -265,7 +265,8 @@ int main(int argc, char* argv[]) {
             valid = false;
         }
 
-        printf("Class %d smallest delta %f\n", (int)i + 1, smallest);
+        printf("Class %d smallest delta %f\n", (int)i + 1,
+               smallest * 180 / M_PI);
     }
 
     if (!valid) {

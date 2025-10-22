@@ -87,9 +87,11 @@ void* worker(void* arg) {
             const double encoder_range =
                 (double)d_max.at(i) - (double)d_min.at(i);
             const double bin_width = encoder_range / num_bins;
-            const double bin = encoder_range == 0 ? 0 :
-                min(floor((o.x[i] - (double)d_min.at(i)) / bin_width),
-                    (double)num_bins - 1);
+            const double bin =
+                encoder_range == 0
+                    ? 0
+                    : min(floor((o.x[i] - (double)d_min.at(i)) / bin_width),
+                          (double)num_bins - 1);
             const int idx = (num_bins * i) + bin;
 
             fprintf(stderr, "Min: %f, Max: %f, X: %f, Bin: %f, idx: %d\n",
@@ -233,7 +235,7 @@ int main(int argc, char* argv[]) {
 
         for (size_t batch = 0; batch < processed_data.size() / batch_size;
              batch++) {
-            printf("\0331k\rBatch: %zu/%zu", batch + 1,
+            printf("\0331\rBatch: %zu/%zu", batch + 1,
                    processed_data.size() / batch_size);
 
             for (size_t idx = 0; idx < batch_size; idx++) {
