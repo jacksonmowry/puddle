@@ -1,13 +1,42 @@
-#+title: Readme
+#+title: Puddle: A Neuromorphic Liquid State Machine Framework for Multi-Objective Optimization
+#+authors: Jackson Mowry & Chris White
 
-* Running
+* Running the Classify App
 1. Run =make=
-2. Run =bash scripts/calculate_grade.bash [path to your dataset dir]=
-   - =bash scripts/calculate_grade.bash datasets/iris=
-   - We're looking for the last line to not say =INVALID RESERVOIR=
-   - We'd ideally like to see all of the =smallest delta= lines to be greater than or equal to 0.01. If you have one line that is less than 0.01 I would continue running until all lines are >= 0.01. We should probably just write a wrapper script that tries N number of reservoirs and picks the best one, decided by the largest group of smallest deltas.
-3. Run =bash scripts/run_example.bash [path to your dataset dir]=
-   - Currently variables have to be hard coded in the script
+2. Calculate an optimal reservoir for your dataset
+#+begin_src shell
+$ bash scripts/generate_best_reservoir.bash
+Usage: scripts/generate_best_reservoir.bash [options] <data_directory>
+Options:
+  -s <size>                    Reservoir size
+  -p <connection_probability>  Connection probability
+  -c <class_neurons>           Number of class neurons
+  -o <output_weight>           Output weight
+  -b <num_bins>                Number of bins
+  -n <num_tests>               Number of reservoirs to generate (default: 10)
+
+
+$ bash scripts/generate_best_reservoir.bash -s 250 -p 0.025 -c 64 -b 10 -n 100 datasets/quadrant_small/
+Generating Reservoir 100/100
+
+Best seed: 13714
+
+Smallest Deltas:
+Class 0: 0.896244
+Class 1: 1.212823
+Class 2: 1.257205
+Class 3: 1.331437
+
+$
+#+end_src
+- The "Best seed" is a reproducible seed that allows you to regenerate your reservoir at anytime, in addition to it being saved in =best_reservoir.json=
+- The "Smallest Deltas" block shows you the results from the best network.
+  - These deltas represent the average angle between vectors in the specified class and the closest other class
+  - The intuition behind this is that the densely connected layer that reads this reservoir will have a much easier time separating classes if they're in distinct regions of the high dimensional space
+3. Perform a training run with your new reservoir
+#+begin_src shell
+
+#+end_src
 
 * Dataset Prep
 - I didn't want to parse out commas so the dataset needs to have commas removed =sed -i 's/,/ /g' data.csv=, we can fix this or leave it.
