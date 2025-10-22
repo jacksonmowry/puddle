@@ -67,7 +67,7 @@ void* worker(void* arg) {
             const double encoder_range =
                 (double)d_max.at(i) - (double)d_min.at(i);
             const double bin_width = encoder_range / num_bins;
-            const double bin =
+            const double bin = encoder_range == 0 ? 0 :
                 min(floor((o.features[i] - (double)d_min.at(i)) / bin_width),
                     (double)num_bins - 1);
             const int idx = (num_bins * i) + bin;
@@ -120,6 +120,7 @@ int main(int argc, char* argv[]) {
 
         dataset.push_back({});
 
+        std::replace(line.begin(), line.end(), ',', ' ');
         stringstream ss(line);
         double data;
         while (ss >> data) {

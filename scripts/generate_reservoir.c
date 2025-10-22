@@ -53,8 +53,6 @@ int main(int argc, char* argv[]) {
     fread(&seed, sizeof(seed), 1, rng);
     fclose(rng);
 
-    srand(seed);
-
     int c;
     int digit_optind = 0;
 
@@ -68,10 +66,11 @@ int main(int argc, char* argv[]) {
             {"connection_probability", required_argument, 0, 'p'},
             {"feature_neurons", required_argument, 0, 'f'},
             {"class_neurons", required_argument, 0, 'c'},
+            {"seed", required_argument, 0, 'r'},
             {0, 0, 0, 0},
         };
 
-        c = getopt_long(argc, argv, "s:i:o:p:f:c:", long_options,
+        c = getopt_long(argc, argv, "s:i:o:p:f:c:r:", long_options,
                         &option_index);
 
         if (c == -1) {
@@ -117,12 +116,17 @@ int main(int argc, char* argv[]) {
         case 'c':
             class_neurons = strtoull(optarg, nullptr, 0);
             break;
+        case 'r':
+            seed = strtoul(optarg, nullptr, 0);
+            break;
         case '?':
             break;
         default:
             printf("?? getopt returned character code 0%o ??\n", c);
         }
     }
+
+    srand(seed);
 
     if (optind < argc) {
         const auto remaining_arguments = argc - optind - 1;
