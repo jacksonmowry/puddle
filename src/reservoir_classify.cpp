@@ -33,7 +33,7 @@ void softmax(vector<double>& x) {
     }
 }
 
-int max_element(const vector<double>& x) {
+int max_idx(const vector<double>& x) {
     double max_elem = -1;
     int max_idx = 0;
 
@@ -256,12 +256,12 @@ int main(int argc, char* argv[]) {
                 vector<double> target(num_classes);
                 target[o.y] = 1;
 
-                if (max_element(y) == o.y) {
+                if (max_idx(y) == o.y) {
                     correct++;
                 }
                 total++;
 
-                conf[o.y][max_element(y)]++;
+                conf[o.y][max_idx(y)]++;
 
                 // Calculate weight updates
                 for (size_t i = 0; i < num_classes; i++) {
