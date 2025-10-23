@@ -9,11 +9,88 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <string>
+#include <type_traits>
 #include <unistd.h>
 
 using namespace std;
 using namespace neuro;
 using nlohmann::json;
+
+class Encoder {
+  public:
+    Encoder(size_t _starting_neuron) : starting_neuron(_starting_neuron) {}
+    virtual ~Encoder() {};
+    virtual size_t num_neurons() = 0;
+    virtual vector<Spike> encode(double x) = 0;
+
+    size_t starting_neuron;
+};
+
+// Balances spikes between 2 neurons for values within the given range of [dmin,
+// dmax]
+// At the extremes `timesteps` will be produced for one neuron while the other
+// will receive 0, if this is not desired extent dmin and dmax accordingly
+class BalancedEncoder : public Encoder {
+  public:
+    BalancedEncoder(size_t starting_neuron, size_t _timesteps, double _dmin,
+                    double _dmax)
+        : Encoder(starting_neuron), timesteps(_timesteps), dmin(_dmin),
+          dmax(_dmax) {
+        range = dmax - dmin;
+    }
+
+    virtual size_t num_neurons() { return 2; }
+    virtual vector<Spike> encode(double x) {
+        vector<Spike> spikes;
+        double frac = (x - dmin) / range;
+
+        for (size_t i = 0; i < frac * timesteps; i++) {
+            spikes.emplace_back(starting_neuron, i, 255);
+        }
+
+        for (size_t i = 0; i < (1 - frac) * timesteps; i++) {
+            spikes.emplace_back(starting_neuron + 1, i, 255);
+        }
+
+        return std::move(spikes);
+    }
+
+    size_t timesteps;
+    double dmin;
+    double dmax;
+    double range;
+};
+
+// Produces single spikes into bins
+class BinEncoder : public Encoder {
+  public:
+    BinEncoder(size_t starting_neuron, size_t _num_bins, double _dmin,
+               double _dmax)
+        : Encoder(starting_neuron), num_bins(_num_bins), dmin(_dmin),
+          dmax(_dmax) {
+        range = dmax - dmin;
+        bin_width = range / num_bins;
+    }
+
+    virtual size_t num_neurons() { return num_bins; }
+    virtual vector<Spike> encode(double x) {
+        vector<Spike> spikes;
+
+        const int bin =
+            min(floor((x - dmin) / bin_width), (double)num_bins - 1);
+        const int idx = starting_neuron + bin;
+
+        spikes.emplace_back(idx, 0, 255);
+
+        return std::move(spikes);
+    }
+
+    size_t num_bins;
+    size_t bin_width;
+    double dmin;
+    double dmax;
+    double range;
+};
 
 struct ObsReward {
     vector<double> obs;
@@ -330,6 +407,187 @@ class Box : public App {
     double delta() { return sqrt(pow(abs(x_pos), 2) + pow(abs(y_pos), 2)); }
 };
 
+class Agent {
+  public:
+    Agent(json network_json, App* _a, double _learning_rate,
+          double _regularization_lambda, vector<Encoder*> encoders, MOA _m)
+        : app(_a), learning_rate(_learning_rate),
+          regularization_lambda(_regularization_lambda), encoders(encoders),
+          m(_m) {
+        n = new Network();
+        n->from_json(network_json);
+
+        weight_idx = n->get_edge_property("Weight")->index;
+        num_outputs = n->num_outputs();
+
+        p = nullptr;
+        json proc_params = n->get_data("proc_params");
+        string proc_name = n->get_data("other")["proc_name"];
+        p = Processor::make(proc_name, proc_params);
+        p->load_network(n);
+
+        if (!n) {
+            fprintf(stderr, "%s: main: Unable to load network.\n", __FILE__);
+        }
+
+        if (!p) {
+            fprintf(stderr, "%s: main: Unable to create processor.\n",
+                    __FILE__);
+        }
+
+        n->make_sorted_node_vector();
+
+        app->reset();
+
+        w.resize(app->num_actions, vector<double>(num_outputs + 1));
+        for (size_t i = 0; i < w.size(); i++) {
+            for (size_t j = 0; j < w[i].size(); j++) {
+                w[i][j] = m.Random_Normal(0, 1);
+            }
+        }
+    }
+
+    Agent(json network_json, App* a, double learning_rate,
+          double regularization_lambda, vector<Encoder*> encoders)
+        : Agent(network_json, a, learning_rate, regularization_lambda, encoders,
+                {}) {}
+
+    ~Agent() {
+        for (Encoder* e : encoders) {
+            delete e;
+        }
+
+        delete n;
+        delete p;
+
+        delete app;
+    }
+
+    vector<double> activations(vector<double> observations) {
+        p->clear_activity();
+
+        // Encode all observations
+        for (size_t ob = 0; ob < observations.size(); ob++) {
+            vector<Spike> spikes = encoders[ob]->encode(observations[ob]);
+
+            for (Spike s : spikes) {
+                p->apply_spikes(spikes, false);
+            }
+        }
+
+        p->run(sim_time);
+
+        const vector<int> firing_counts = p->output_counts();
+        vector<double> normalized(firing_counts.size() + 1);
+        normalized[0] = 1;
+        transform(firing_counts.begin(), firing_counts.end(),
+                  normalized.begin() + 1,
+                  [](int x) { return (double)x / 100; });
+
+        return normalized;
+    }
+
+    double grade_reservoir(vector<size_t> tests_per_feature) {
+        app->reset();
+
+        vector<double> increment_width(app->num_observations);
+        vector<double> counters(app->num_observations, 0);
+        for (size_t i = 0; i < app->dmin.size(); i++) {
+            increment_width[i] =
+                (app->dmax[i] - app->dmin[i]) / tests_per_feature[i];
+        }
+
+        vector<vector<double>> outputs;
+
+        bool done = false;
+        size_t idx = app->num_observations - 1;
+        while (!done) {
+            // We have to move this into the agent first
+            // Will use the `inputs` vector to be encoded
+            // dmin + (increment_width[idx] * counters[idx])
+            vector<double> inputs;
+            for (size_t i = 0; i < app->num_observations; i++) {
+                inputs.push_back(app->dmin[i] +
+                                 (increment_width[i] * counters[i]));
+            }
+
+            vector<double> normalized_activations = activations(inputs);
+            outputs.push_back(normalized_activations);
+
+            while (true) {
+                counters[idx]++;
+
+                if (counters[idx] == tests_per_feature[idx]) {
+                    if (idx == 0) {
+                        done = true;
+                        break;
+                    }
+
+                    counters[idx] = 0;
+                    idx--;
+                } else {
+                    break;
+                }
+            }
+
+            idx = app->num_observations - 1;
+        }
+
+        double min = DBL_MAX;
+        for (size_t i = 0; i < outputs.size(); i++) {
+            for (size_t j = i + 1; j < outputs.size(); j++) {
+                // Calculate angle between vectors a and b
+                double dot_product = 0;
+                double norm_a = 0;
+                double norm_b = 0;
+
+                const vector<double>& a = outputs[i];
+                const vector<double>& b = outputs[j];
+
+                for (size_t k = 0; k < outputs[i].size(); k++) {
+                    dot_product += a[k] * b[k];
+                    norm_a += pow(a[k], 2);
+                    norm_b += pow(b[k], 2);
+                }
+
+                norm_a = sqrt(norm_a);
+                norm_b = sqrt(norm_b);
+
+                double angle = acos(dot_product / (norm_a * norm_b));
+                if (angle < min) {
+                    min = angle;
+                }
+            }
+        }
+
+        return min;
+    }
+
+    void train(size_t epochs) {
+        for (size_t i = 0; i < epochs; i++) {
+            fprintf("Epoch: %zu, epsilon: %f ", i, epsilon);
+        }
+    }
+
+    App* app;
+    Network* n;
+    Processor* p;
+    vector<Encoder*> encoders;
+    MOA m;
+    double learning_rate;
+    double regularization_lambda;
+    size_t sim_time = 100;
+
+    vector<vector<double>> w;
+
+    int weight_idx;
+    size_t num_outputs;
+
+    const double discount_factor = 0.95;
+    const double epislon_decay_factor = 0.999;
+    double epsilon = 0.5;
+};
+
 int max_idx(const vector<double>& x) {
     double max_elem = -1;
     int max_idx = 0;
@@ -370,115 +628,6 @@ vector<double> matrix_vector_multiply(vector<vector<double>> m,
     return result;
 }
 
-vector<double> activations(vector<double> o, Processor* p, vector<double> dmin,
-                           vector<double> dmax, size_t num_bins,
-                           size_t num_outputs) {
-    p->clear_activity();
-
-    // Encode observations
-    for (size_t ob = 0; ob < o.size(); ob++) {
-        const double encoder_range = dmax[ob] - dmin[ob];
-        const double bin_width = encoder_range / num_bins;
-        const int bin =
-            min(floor((o[ob] - dmin[ob]) / bin_width), (double)num_bins - 1);
-        const int idx = (num_bins * ob) + bin;
-
-        p->apply_spike({idx, 0, 255}, false);
-    }
-
-    p->run(100);
-    const vector<int> firing_counts = p->output_counts();
-    vector<double> normalized(firing_counts.size() + 1);
-    normalized[0] = 1;
-    transform(firing_counts.begin(), firing_counts.end(),
-              normalized.begin() + 1, [](int x) { return (double)x / 100; });
-
-    return normalized;
-}
-
-vector<double> bin_activations(vector<int> o, Processor* p, size_t num_bins) {
-    p->clear_activity();
-
-    // Encode observations
-    for (size_t ob = 0; ob < o.size(); ob++) {
-        p->apply_spike({(int)(ob * num_bins) + o[ob], 0, 255}, false);
-    }
-
-    p->run(100);
-    const vector<int> firing_counts = p->output_counts();
-    vector<double> normalized(firing_counts.size() + 1);
-    normalized[0] = 1;
-    transform(firing_counts.begin(), firing_counts.end(),
-              normalized.begin() + 1, [](int x) { return (double)x / 100; });
-
-    return normalized;
-}
-
-double grade_reservoir(Processor* p, size_t num_observations, size_t num_bins) {
-    vector<vector<double>> outputs;
-    vector<double> angles;
-    vector<int> bins(num_observations);
-    size_t idx = num_observations - 1;
-    bool done = false;
-
-    while (!done) {
-        vector<double> activations = bin_activations(bins, p, num_bins);
-        outputs.push_back(bin_activations(bins, p, num_bins));
-
-        while (true) {
-            bins[idx]++;
-
-            if (bins[idx] == num_bins) {
-                if (idx == 0) {
-                    done = true;
-                    break;
-                }
-
-                bins[idx] = 0;
-                idx--;
-            } else {
-                break;
-            }
-        }
-
-        idx = num_observations - 1;
-    }
-
-    double min = DBL_MAX;
-    // Calculate angles here
-    for (size_t i = 0; i < outputs.size(); i++) {
-        for (size_t j = i + 1; j < outputs.size(); j++) {
-            // Calculate angle
-            double dot_product = 0;
-            double norm_a = 0;
-            double norm_b = 0;
-
-            const vector<double>& a = outputs[i];
-            const vector<double>& b = outputs[j];
-
-            for (size_t k = 0; k < outputs[i].size(); k++) {
-                dot_product += a[k] * b[k];
-                norm_a += pow(a[k], 2);
-                norm_b += pow(b[k], 2);
-            }
-
-            norm_a = sqrt(norm_a);
-            norm_b = sqrt(norm_b);
-
-            double angle = acos(dot_product / (norm_a * norm_b));
-            if (angle < min) {
-                min = angle;
-            }
-        }
-    }
-
-    return min;
-}
-
-json d_min;
-json d_max;
-size_t num_bins;
-
 int main(int argc, char* argv[]) {
     if (argc != 6) {
         fprintf(
@@ -505,43 +654,34 @@ int main(int argc, char* argv[]) {
     size_t total_epochs;
     sscanf(argv[4], "%zu", &total_epochs);
 
+    size_t num_bins;
     sscanf(argv[5], "%zu", &num_bins);
-
-    Network* n = new Network();
-    n->from_json(network_json);
-    const int weight_idx = n->get_edge_property("Weight")->index;
-    const size_t num_outputs = n->num_outputs();
-    Processor* p = nullptr;
-    json proc_params = n->get_data("proc_params");
-    string proc_name = n->get_data("other")["proc_name"];
-    p = Processor::make(proc_name, proc_params);
-    p->load_network(n);
-
-    if (!n) {
-        fprintf(stderr, "%s: main: Unable to load network.\n", __FILE__);
-    }
-    n->make_sorted_node_vector();
 
     App* app = new Box();
 
-    // double min_angle = grade_reservoir(p, app->num_observations, num_bins);
-    // printf("Minimum angle between vectors: %f\n", min_angle);
-    // exit(1);
-
     MOA m;
     m.Seed(m.Seed_From_Time(), "rand");
-    vector<vector<double>> w(app->num_actions, vector<double>(num_outputs + 1));
-    for (size_t i = 0; i < w.size(); i++) {
-        for (size_t j = 0; j < w[i].size(); j++) {
-            w[i][j] = m.Random_Normal(0, 1);
-        }
-    }
 
     const double discount_factor = 0.95;
     double epsilon = 0.5;
     const double epsilon_decay_factor = 0.999;
 
     vector<double> training_reward;
+
+    // Create the actual encoders we're going to use
+    vector<Encoder*> encoders;
+    for (size_t i = 0; i < app->num_observations; i++) {
+        double min = app->dmin[i];
+        double max = app->dmax[i];
+
+        encoders.emplace_back(
+            new BinEncoder((i * num_bins), num_bins, min, max));
+    }
+
+    Agent a(network_json, app, learning_rate, lambda, std::move(encoders), m);
+
+    const double largest_min_angle = a.grade_reservoir({10, 10});
+    printf("Largest Minimum Angle: %f\n", largest_min_angle);
 
     // Training Loop
     for (size_t epochs = 0; epochs < total_epochs; epochs++) {
@@ -558,10 +698,9 @@ int main(int argc, char* argv[]) {
         while (!done) {
             // printf("\0331k\rStep: %zu", step++);
             size_t action = -1;
-            vector<double> reservoir_activations = activations(
-                o.obs, p, app->dmin, app->dmax, num_bins, num_outputs);
+            vector<double> reservoir_activations = a.activations(o.obs);
             vector<double> model_prediction =
-                matrix_vector_multiply(w, reservoir_activations);
+                matrix_vector_multiply(a.w, reservoir_activations);
 
             if (m.Random_Double() < epsilon) {
                 // Perform random action
@@ -579,10 +718,9 @@ int main(int argc, char* argv[]) {
             done = new_o.done;
             epoch_reward += new_o.reward;
 
-            vector<double> next_activations = activations(
-                new_o.obs, p, app->dmin, app->dmax, num_bins, num_outputs);
+            vector<double> next_activations = a.activations(new_o.obs);
             vector<double> next_prediction =
-                matrix_vector_multiply(w, next_activations);
+                matrix_vector_multiply(a.w, next_activations);
             const double target =
                 new_o.reward + discount_factor * max_element(next_prediction);
 
@@ -598,13 +736,13 @@ int main(int argc, char* argv[]) {
             }
 
             // Perform weight updates
-            for (size_t row = 0; row < w.size(); row++) {
-                for (size_t col = 0; col < w[row].size(); col++) {
+            for (size_t row = 0; row < a.w.size(); row++) {
+                for (size_t col = 0; col < a.w[row].size(); col++) {
                     const double gradient =
                         partial_gradient[row] * reservoir_activations[col];
 
-                    w[row][col] -=
-                        (gradient * learning_rate) + (lambda * w[row][col]);
+                    a.w[row][col] -=
+                        (gradient * learning_rate) + (lambda * a.w[row][col]);
                 }
             }
 
@@ -619,73 +757,70 @@ int main(int argc, char* argv[]) {
     }
 
     // Testing loop
-    vector<double> testing_rewards;
-    for (size_t epochs = 0; epochs < 100; epochs++) {
-        printf("Test%zu\n", epochs);
+    // vector<double> testing_rewards;
+    // for (size_t epochs = 0; epochs < 100; epochs++) {
+    //     printf("Test%zu\n", epochs);
 
-        ObsReward o = app->reset();
-        bool done = false;
-        size_t step = 0;
-        double epoch_reward = 0;
+    //     ObsReward o = app->reset();
+    //     bool done = false;
+    //     size_t step = 0;
+    //     double epoch_reward = 0;
 
-        while (!done) {
-            size_t action = -1;
-            vector<double> reservoir_activations = activations(
-                o.obs, p, app->dmin, app->dmax, num_bins, num_outputs);
-            vector<double> model_prediction =
-                matrix_vector_multiply(w, reservoir_activations);
+    //     while (!done) {
+    //         size_t action = -1;
+    //         vector<double> reservoir_activations = a.activations(o.obs);
+    //         vector<double> model_prediction =
+    //             matrix_vector_multiply(a.w, reservoir_activations);
 
-            // Get prediced action
-            action = max_idx(model_prediction);
+    //         // Get prediced action
+    //         action = max_idx(model_prediction);
 
-            ObsReward new_o = app->step(action);
-            step++;
-            if (epochs == total_epochs - 1) {
-                app->print();
-            }
-            done = new_o.done;
-            epoch_reward += new_o.reward;
+    //         ObsReward new_o = app->step(action);
+    //         step++;
+    //         if (epochs == total_epochs - 1) {
+    //             app->print();
+    //         }
+    //         done = new_o.done;
+    //         epoch_reward += new_o.reward;
 
-            o = new_o;
-        }
+    //         o = new_o;
+    //     }
 
-        if (epochs == total_epochs - 1) {
-            app->print();
-        }
+    //     if (epochs == total_epochs - 1) {
+    //         app->print();
+    //     }
 
-        testing_rewards.push_back(epoch_reward / (double)step);
-    }
+    //     testing_rewards.push_back(epoch_reward / (double)step);
+    // }
 
-    delete p;
-    delete n;
+    // delete p;
+    // delete n;
 
-    printf("Final weight matrix:\n");
-    for (size_t i = 0; i < w.size(); i++) {
-        for (size_t j = 0; j < w[i].size(); j++) {
-            printf("%6.3f ", w[i][j]);
-        }
-        printf("\n");
-    }
+    // printf("Final weight matrix:\n");
+    // for (size_t i = 0; i < a.w.size(); i++) {
+    //     for (size_t j = 0; j < a.w[i].size(); j++) {
+    //         printf("%6.3f ", a.w[i][j]);
+    //     }
+    //     printf("\n");
+    // }
 
-    printf("Training rewards: [");
-    for (size_t i = 0; i < training_reward.size(); i++) {
-        printf("%f", training_reward[i]);
+    // printf("Training rewards: [");
+    // for (size_t i = 0; i < training_reward.size(); i++) {
+    //     printf("%f", training_reward[i]);
 
-        if (i != training_reward.size() - 1) {
-            printf(", ");
-        }
-    }
-    printf("]\n");
+    //     if (i != training_reward.size() - 1) {
+    //         printf(", ");
+    //     }
+    // }
+    // printf("]\n");
 
-    printf("Testing rewards: [");
-    for (size_t i = 0; i < testing_rewards.size(); i++) {
-        printf("%f", testing_rewards[i]);
+    // printf("Testing rewards: [");
+    // for (size_t i = 0; i < testing_rewards.size(); i++) {
+    //     printf("%f", testing_rewards[i]);
 
-        if (i != testing_rewards.size() - 1) {
-            printf(", ");
-        }
-    }
-    printf("]\n");
-
-    free(app);
+    //     if (i != testing_rewards.size() - 1) {
+    //         printf(", ");
+    //     }
+    // }
+    // printf("]\n");
 }

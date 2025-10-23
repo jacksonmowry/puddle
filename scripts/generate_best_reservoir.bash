@@ -75,6 +75,10 @@ for i in $(seq 1 $N); do
     seed=$((RANDOM % 65563))
 
     printf '\0331\rGenerating Reservoir %d/%d' $((i)) $((N))
+    if ((i != 1)); then
+        printf ' %s' "${deltas[*]}"
+    fi
+
     out=$(bash ./scripts/calculate_grade.bash -s "${s}" -p "${p}" -f $((num_features * num_bins)) -c "${c}" -o "${o}" -b "${num_bins}" -r ${seed} ${data_dir})
 
     if ! grep -q "INVALID" <<<"$out"; then
@@ -84,9 +88,13 @@ for i in $(seq 1 $N); do
             best_min=$(awk 'BEGIN {min = 1.0} {if ($5 < min) { min = $5 }} END {print min}' <<<"$(tail -n "${label_count}" <<<"${out}")")
         else
             tmp_deltas=($(awk '{print $5}' <<<"$(tail -n $label_count <<<"$out")"))
+            # printf '\ntemp deltas: [%s]\n' "${tmp_deltas[*]}"
             tmp_min=$(awk 'BEGIN {min = 1.0} {if ($5 < min) { min = $5 }} END {print min}' <<<"$(tail -n "${label_count}" <<<"${out}")")
+            # printf '\ntemp min: [%s]\n' "${tmp_min}"
+            # printf '\nbest min: [%s]\n' "${best_min}"
             if (($(bc -l <<<"$tmp_min > $best_min"))); then
                 best_seed=${seed}
+                best_min="${tmp_min}"
                 deltas=(${tmp_deltas[@]})
             fi
         fi

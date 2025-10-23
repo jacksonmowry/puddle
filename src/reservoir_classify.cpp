@@ -231,7 +231,7 @@ int main(int argc, char* argv[]) {
         size_t correct = 0;
         size_t total = 0;
 
-        const size_t batch_size = 10;
+        const size_t batch_size = 1;
 
         for (size_t batch = 0; batch < processed_data.size() / batch_size;
              batch++) {
