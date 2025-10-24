@@ -407,6 +407,46 @@ class Box : public App {
     double delta() { return sqrt(pow(abs(x_pos), 2) + pow(abs(y_pos), 2)); }
 };
 
+vector<double> matrix_vector_multiply(vector<vector<double>> m,
+                                      vector<double> v) {
+    assert(m[0].size() == v.size());
+
+    vector<double> result(v.size(), 0);
+    for (size_t row = 0; row < m.size(); row++) {
+        for (size_t col = 0; col < m[row].size(); col++) {
+            result[row] += m[row][col] * v[col];
+        }
+    }
+
+    return result;
+}
+
+int max_idx(const vector<double>& x) {
+    double max_elem = -1;
+    int max_idx = 0;
+
+    for (size_t i = 0; i < x.size(); i++) {
+        if (x[i] > max_elem) {
+            max_elem = x[i];
+            max_idx = i;
+        }
+    }
+
+    return max_idx;
+}
+
+int max_element(const vector<double>& x) {
+    double max_elem = -1;
+
+    for (size_t i = 0; i < x.size(); i++) {
+        if (x[i] > max_elem) {
+            max_elem = x[i];
+        }
+    }
+
+    return max_elem;
+}
+
 class Agent {
   public:
     Agent(json network_json, App* _a, double _learning_rate,
@@ -563,10 +603,75 @@ class Agent {
         return min;
     }
 
-    void train(size_t epochs) {
+    vector<double> train(size_t epochs) {
+        vector<double> training_rewards;
+        training_rewards.reserve(epochs);
+
         for (size_t i = 0; i < epochs; i++) {
-            fprintf("Epoch: %zu, epsilon: %f ", i, epsilon);
+            ObsReward o = app->reset();
+            epsilon *= epsilon_decay_factor;
+            bool done = false;
+            size_t step = 0;
+            double epoch_reward = 0;
+
+            while (!done) {
+                step++;
+                fprintf(stderr, "\n\0331\rEpoch: %zu, epislon: %f, step: %zu",
+                        i, epsilon, step);
+
+                size_t action = -1;
+                vector<double> reservoir_activations = activations(o.obs);
+                vector<double> model_predictions =
+                    matrix_vector_multiply(w, reservoir_activations);
+
+                if (m.Random_Double() < epsilon) {
+                    // Perform random action
+                    action = m.Random_32() % app->num_actions;
+                } else {
+                    // Get predicted action
+                    action = max_idx(model_predictions);
+                }
+
+                ObsReward new_o = app->step(action);
+
+                done = new_o.done;
+                epoch_reward += new_o.reward;
+
+                vector<double> next_activations = activations(new_o.obs);
+                vector<double> next_predictions =
+                    matrix_vector_multiply(w, next_activations);
+                const double target =
+                    new_o.reward +
+                    discount_factor * max_element(next_predictions);
+
+                vector<double> y = model_predictions;
+                vector<double> y_hat = y;
+                y[action] = target;
+
+                vector<double> partial_gradient(y.size());
+
+                for (size_t j = 0; j < y.size(); j++) {
+                    partial_gradient[j] = y_hat[j] - y[j];
+                }
+
+                // Perform weight updates
+                for (size_t row = 0; row < w.size(); row++) {
+                    for (size_t col = 0; col < w[row].size(); col++) {
+                        const double gradient =
+                            partial_gradient[row] * reservoir_activations[col];
+
+                        w[row][col] -= (gradient * learning_rate) +
+                                       (regularization_lambda * w[row][col]);
+                    }
+                }
+
+                o = new_o;
+            }
+
+            training_rewards.push_back(epoch_reward / (double)step);
         }
+
+        return training_rewards;
     }
 
     App* app;
@@ -584,49 +689,9 @@ class Agent {
     size_t num_outputs;
 
     const double discount_factor = 0.95;
-    const double epislon_decay_factor = 0.999;
+    const double epsilon_decay_factor = 0.999;
     double epsilon = 0.5;
 };
-
-int max_idx(const vector<double>& x) {
-    double max_elem = -1;
-    int max_idx = 0;
-
-    for (size_t i = 0; i < x.size(); i++) {
-        if (x[i] > max_elem) {
-            max_elem = x[i];
-            max_idx = i;
-        }
-    }
-
-    return max_idx;
-}
-
-int max_element(const vector<double>& x) {
-    double max_elem = -1;
-
-    for (size_t i = 0; i < x.size(); i++) {
-        if (x[i] > max_elem) {
-            max_elem = x[i];
-        }
-    }
-
-    return max_elem;
-}
-
-vector<double> matrix_vector_multiply(vector<vector<double>> m,
-                                      vector<double> v) {
-    assert(m[0].size() == v.size());
-
-    vector<double> result(v.size(), 0);
-    for (size_t row = 0; row < m.size(); row++) {
-        for (size_t col = 0; col < m[row].size(); col++) {
-            result[row] += m[row][col] * v[col];
-        }
-    }
-
-    return result;
-}
 
 int main(int argc, char* argv[]) {
     if (argc != 6) {
