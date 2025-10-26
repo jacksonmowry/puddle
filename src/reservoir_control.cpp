@@ -1,3 +1,4 @@
+#include "encoder.hpp"
 #include "framework.hpp"
 #include <algorithm>
 #include <cassert>
@@ -9,88 +10,11 @@
 #include <pthread.h>
 #include <stddef.h>
 #include <string>
-#include <type_traits>
 #include <unistd.h>
 
 using namespace std;
 using namespace neuro;
 using nlohmann::json;
-
-class Encoder {
-  public:
-    Encoder(size_t _starting_neuron) : starting_neuron(_starting_neuron) {}
-    virtual ~Encoder() {};
-    virtual size_t num_neurons() = 0;
-    virtual vector<Spike> encode(double x) = 0;
-
-    size_t starting_neuron;
-};
-
-// Balances spikes between 2 neurons for values within the given range of [dmin,
-// dmax]
-// At the extremes `timesteps` will be produced for one neuron while the other
-// will receive 0, if this is not desired extent dmin and dmax accordingly
-class BalancedEncoder : public Encoder {
-  public:
-    BalancedEncoder(size_t starting_neuron, size_t _timesteps, double _dmin,
-                    double _dmax)
-        : Encoder(starting_neuron), timesteps(_timesteps), dmin(_dmin),
-          dmax(_dmax) {
-        range = dmax - dmin;
-    }
-
-    virtual size_t num_neurons() { return 2; }
-    virtual vector<Spike> encode(double x) {
-        vector<Spike> spikes;
-        double frac = (x - dmin) / range;
-
-        for (size_t i = 0; i < frac * timesteps; i++) {
-            spikes.emplace_back(starting_neuron, i, 255);
-        }
-
-        for (size_t i = 0; i < (1 - frac) * timesteps; i++) {
-            spikes.emplace_back(starting_neuron + 1, i, 255);
-        }
-
-        return std::move(spikes);
-    }
-
-    size_t timesteps;
-    double dmin;
-    double dmax;
-    double range;
-};
-
-// Produces single spikes into bins
-class BinEncoder : public Encoder {
-  public:
-    BinEncoder(size_t starting_neuron, size_t _num_bins, double _dmin,
-               double _dmax)
-        : Encoder(starting_neuron), num_bins(_num_bins), dmin(_dmin),
-          dmax(_dmax) {
-        range = dmax - dmin;
-        bin_width = range / num_bins;
-    }
-
-    virtual size_t num_neurons() { return num_bins; }
-    virtual vector<Spike> encode(double x) {
-        vector<Spike> spikes;
-
-        const int bin =
-            min(floor((x - dmin) / bin_width), (double)num_bins - 1);
-        const int idx = starting_neuron + bin;
-
-        spikes.emplace_back(idx, 0, 255);
-
-        return std::move(spikes);
-    }
-
-    size_t num_bins;
-    size_t bin_width;
-    double dmin;
-    double dmax;
-    double range;
-};
 
 struct ObsReward {
     vector<double> obs;
@@ -316,6 +240,7 @@ class TightRope : public App {
     virtual void print() {
         char buf[22] = {0};
         memset(buf, '-', sizeof(buf));
+        buf[21] = '\0';
 
         if (pos == 10) {
             buf[pos] = '!';
@@ -383,11 +308,12 @@ class Box : public App {
     }
 
     virtual void print() {
-        char buf[41][42] = {0};
+        char buf[41][43] = {0};
         memset(buf, '-', sizeof(buf));
 
-        for (size_t i = 0; i < 40; i++) {
+        for (size_t i = 0; i < 41; i++) {
             buf[i][41] = '\n';
+            buf[i][42] = '\0';
         }
 
         if (x_pos == 0 && y_pos == 0) {
@@ -397,7 +323,9 @@ class Box : public App {
             buf[y_pos + 20][x_pos + 20] = 'X';
         }
 
-        puts((char*)buf);
+        for (size_t i = 0; i < 41; i++) {
+            printf("%s", buf[i]);
+        }
     }
 
     int x_pos = 0;
@@ -510,9 +438,7 @@ class Agent {
         for (size_t ob = 0; ob < observations.size(); ob++) {
             vector<Spike> spikes = encoders[ob]->encode(observations[ob]);
 
-            for (Spike s : spikes) {
-                p->apply_spikes(spikes, false);
-            }
+            p->apply_spikes(spikes, false);
         }
 
         p->run(sim_time);
@@ -614,10 +540,16 @@ class Agent {
             size_t step = 0;
             double epoch_reward = 0;
 
+            printf("\n");
+
             while (!done) {
                 step++;
-                fprintf(stderr, "\n\0331\rEpoch: %zu, epislon: %f, step: %zu",
-                        i, epsilon, step);
+                fprintf(stderr, "\0331\rEpoch: %zu, epislon: %f, step: %zu", i,
+                        epsilon, step);
+
+                if (i == epochs - 1) {
+                    app->print();
+                }
 
                 size_t action = -1;
                 vector<double> reservoir_activations = activations(o.obs);
@@ -669,9 +601,60 @@ class Agent {
             }
 
             training_rewards.push_back(epoch_reward / (double)step);
+
+            if (i == epochs - 1) {
+                app->print();
+            }
         }
 
         return training_rewards;
+    }
+
+    vector<double> test(size_t epochs) {
+        vector<double> testing_rewards;
+        testing_rewards.reserve(epochs);
+
+        for (size_t i = 0; i < epochs; i++) {
+            ObsReward o = app->reset();
+            bool done = false;
+            size_t step = 0;
+            double epoch_reward = 0;
+
+            printf("\n");
+
+            while (!done) {
+                step++;
+                fprintf(stderr, "\0331\rTesting Epoch: %zu, step: %zu", i,
+                        step);
+
+                if (i == epochs - 1) {
+                    app->print();
+                }
+
+                size_t action = -1;
+                vector<double> reservoir_activations = activations(o.obs);
+                vector<double> model_predictions =
+                    matrix_vector_multiply(w, reservoir_activations);
+
+                // Get predicted action
+                action = max_idx(model_predictions);
+
+                ObsReward new_o = app->step(action);
+
+                done = new_o.done;
+                epoch_reward += new_o.reward;
+
+                o = new_o;
+            }
+
+            testing_rewards.push_back(epoch_reward / (double)step);
+
+            if (i == epochs - 1) {
+                app->print();
+            }
+        }
+
+        return testing_rewards;
     }
 
     App* app;
@@ -722,7 +705,7 @@ int main(int argc, char* argv[]) {
     size_t num_bins;
     sscanf(argv[5], "%zu", &num_bins);
 
-    App* app = new Box();
+    App* app = new TightRope();
 
     MOA m;
     m.Seed(m.Seed_From_Time(), "rand");
@@ -739,88 +722,40 @@ int main(int argc, char* argv[]) {
         double min = app->dmin[i];
         double max = app->dmax[i];
 
+        // encoders.emplace_back(
+        //     new BinEncoder((i * num_bins), num_bins, min, max));
         encoders.emplace_back(
-            new BinEncoder((i * num_bins), num_bins, min, max));
+            new BalancedEncoder((i * num_bins), 100, min, max));
     }
 
     Agent a(network_json, app, learning_rate, lambda, std::move(encoders), m);
 
-    const double largest_min_angle = a.grade_reservoir({10, 10});
-    printf("Largest Minimum Angle: %f\n", largest_min_angle);
+    const double min_angle = a.grade_reservoir({10, 10});
+    printf("Largest Minimum Angle: %f\n", min_angle);
 
-    // Training Loop
-    for (size_t epochs = 0; epochs < total_epochs; epochs++) {
-        printf("Epoch %zu, epsilon: %f:\n", epochs, epsilon);
+    // Train readout layer
+    vector<double> test = a.train(total_epochs);
+    vector<double> train = a.test(total_epochs / 10);
 
-        ObsReward o = app->reset();
-        epsilon *= epsilon_decay_factor;
-        bool done = false;
-        size_t step = 0;
-        double epoch_reward = 0;
+    printf("test: [\n");
+    for (size_t i = 0; i < test.size(); i++) {
+        printf("%f", test[i]);
 
-        // app->print();
-
-        while (!done) {
-            // printf("\0331k\rStep: %zu", step++);
-            size_t action = -1;
-            vector<double> reservoir_activations = a.activations(o.obs);
-            vector<double> model_prediction =
-                matrix_vector_multiply(a.w, reservoir_activations);
-
-            if (m.Random_Double() < epsilon) {
-                // Perform random action
-                action = m.Random_32() % app->num_actions;
-            } else {
-                // Get prediced action
-                action = max_idx(model_prediction);
-            }
-
-            ObsReward new_o = app->step(action);
-            step++;
-            if (epochs == total_epochs - 1) {
-                app->print();
-            }
-            done = new_o.done;
-            epoch_reward += new_o.reward;
-
-            vector<double> next_activations = a.activations(new_o.obs);
-            vector<double> next_prediction =
-                matrix_vector_multiply(a.w, next_activations);
-            const double target =
-                new_o.reward + discount_factor * max_element(next_prediction);
-
-            vector<double> y = model_prediction;
-
-            vector<double> y_hat = y;
-            y[action] = target;
-
-            vector<double> partial_gradient(y.size());
-
-            for (size_t i = 0; i < y.size(); i++) {
-                partial_gradient[i] = y_hat[i] - y[i];
-            }
-
-            // Perform weight updates
-            for (size_t row = 0; row < a.w.size(); row++) {
-                for (size_t col = 0; col < a.w[row].size(); col++) {
-                    const double gradient =
-                        partial_gradient[row] * reservoir_activations[col];
-
-                    a.w[row][col] -=
-                        (gradient * learning_rate) + (lambda * a.w[row][col]);
-                }
-            }
-
-            o = new_o;
+        if (i != test.size() - 1) {
+            printf(", ");
         }
-
-        if (epochs == total_epochs - 1) {
-            app->print();
-        }
-
-        training_reward.push_back(epoch_reward / (double)step);
     }
+    printf("]\n");
 
+    printf("train: [\n");
+    for (size_t i = 0; i < train.size(); i++) {
+        printf("%f", train[i]);
+
+        if (i != train.size() - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
     // Testing loop
     // vector<double> testing_rewards;
     // for (size_t epochs = 0; epochs < 100; epochs++) {

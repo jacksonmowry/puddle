@@ -1,9 +1,11 @@
+#include "encoder.hpp"
 #include "framework.hpp"
 #include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <float.h>
 #include <fstream>
 #include <math.h>
 #include <pthread.h>
@@ -44,6 +46,7 @@ json d_min;
 json d_max;
 size_t num_bins;
 size_t num_classes;
+vector<Encoder*> encoders;
 
 void* worker(void* arg) {
     Network* n = (Network*)arg;
@@ -65,21 +68,12 @@ void* worker(void* arg) {
 
         observation o = dataset[idx];
         for (size_t i = 0; i < o.features.size(); i++) {
-            const double encoder_range =
-                (double)d_max.at(i) - (double)d_min.at(i);
-            const double bin_width = encoder_range / num_bins;
-            const double bin =
-                encoder_range == 0
-                    ? 0
-                    : min(floor((o.features[i] - (double)d_min.at(i)) /
-                                bin_width),
-                          (double)num_bins - 1);
-            const int idx = (num_bins * i) + bin;
+            vector<Spike> spikes = encoders[i]->encode(o.features[i]);
 
-            p->apply_spike({idx, 0, 255}, false);
+            p->apply_spikes(spikes, false);
         }
 
-        p->run(100);
+        p->run(200);
 
         atom a;
         a.label = o.label;
@@ -154,6 +148,16 @@ int main(int argc, char* argv[]) {
     bool done = false;
     n->make_sorted_node_vector();
 
+    // Create the actual encoders we're going to use
+    for (size_t i = 0; i < d_min.size(); i++) {
+        double min = d_min.at(i);
+        double max = d_max.at(i);
+
+        encoders.emplace_back(new BalancedEncoder((i * 2), 100, min, max));
+        // encoders.emplace_back(
+        //     new BinEncoder((i * num_bins), num_bins, min, max));
+    }
+
     // SETUP Thread pool
     pthread_t* threads = (pthread_t*)calloc(thread_count, sizeof(pthread_t));
     for (std::size_t i = 0; i < thread_count; i++) {
@@ -223,9 +227,9 @@ int main(int argc, char* argv[]) {
                 dunn[a.label][b.label].total += 0;
             } else if (a_norm != 0 && b_norm != 0) {
                 double val = dot / (sqrt(a_norm) * sqrt(b_norm));
-                dunn[a.label][b.label].total += acos(val);
+                dunn[a.label][b.label].total += acos(val) * 180 / M_PI;
             } else {
-                dunn[a.label][b.label].total += 1;
+                dunn[a.label][b.label].total += 180;
             }
 
             dunn[a.label][b.label].count++;
@@ -246,9 +250,18 @@ int main(int argc, char* argv[]) {
 
     bool valid = true;
 
+    double max_intraclass = DBL_MIN;
+    for (size_t i = 0; i < dunn.size(); i++) {
+        if (dunn[i][i].total / dunn[i][i].count > max_intraclass) {
+            max_intraclass = dunn[i][i].total / dunn[i][i].count;
+        }
+    }
+
+    printf("\nMaximum intraclass distance: %f\n\n", max_intraclass);
+
     // Calculate the smallest delta between each class and the others
     for (size_t i = 0; i < vals.size(); i++) {
-        double smallest = 1;
+        double smallest = DBL_MAX;
         double target = vals[i][i];
 
         for (size_t j = 0; j < vals.size(); j++) {
@@ -265,8 +278,7 @@ int main(int argc, char* argv[]) {
             valid = false;
         }
 
-        printf("Class %d smallest delta %f\n", (int)i + 1,
-               smallest * 180 / M_PI);
+        printf("Class %2d smallest delta %f\n", (int)i + 1, smallest);
     }
 
     if (!valid) {

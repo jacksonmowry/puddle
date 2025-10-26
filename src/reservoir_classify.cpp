@@ -1,3 +1,4 @@
+#include "encoder.hpp"
 #include "framework.hpp"
 #include <algorithm>
 #include <atomic>
@@ -49,6 +50,7 @@ int max_idx(const vector<double>& x) {
 
 vector<Observation> processed_data;
 vector<Observation> dataset;
+vector<Encoder*> encoders;
 atomic_size_t idx = 0;
 json d_min;
 json d_max;
@@ -84,23 +86,12 @@ void* worker(void* arg) {
         p->clear_activity();
 
         for (size_t i = 0; i < o.x.size(); i++) {
-            const double encoder_range =
-                (double)d_max.at(i) - (double)d_min.at(i);
-            const double bin_width = encoder_range / num_bins;
-            const double bin =
-                encoder_range == 0
-                    ? 0
-                    : min(floor((o.x[i] - (double)d_min.at(i)) / bin_width),
-                          (double)num_bins - 1);
-            const int idx = (num_bins * i) + bin;
+            vector<Spike> spikes = encoders[i]->encode(o.x[i]);
 
-            fprintf(stderr, "Min: %f, Max: %f, X: %f, Bin: %f, idx: %d\n",
-                    (double)d_min.at(i), (double)d_max.at(i), o.x[i], bin, idx);
-
-            p->apply_spike({idx, 0, 255}, false);
+            p->apply_spikes(spikes, false);
         }
 
-        p->run(100);
+        p->run(200);
 
         // 1 for bias
         processed_data[work_idx].x.push_back(1);
@@ -197,6 +188,16 @@ int main(int argc, char* argv[]) {
 
     fprintf(stderr, "Preprocessing dataset\n");
 
+    // Create the actual encoders we're going to use
+    for (size_t i = 0; i < d_min.size(); i++) {
+        double min = d_min.at(i);
+        double max = d_max.at(i);
+
+        encoders.emplace_back(new BalancedEncoder((i * 2), 100, min, max));
+        // encoders.emplace_back(
+        //     new BinEncoder((i * num_bins), num_bins, min, max));
+    }
+
     pthread_t* threads = (pthread_t*)calloc(num_threads, sizeof(*threads));
 
     for (size_t i = 0; i < num_threads; i++) {
@@ -205,6 +206,10 @@ int main(int argc, char* argv[]) {
 
     for (size_t i = 0; i < num_threads; i++) {
         pthread_join(threads[i], nullptr);
+    }
+
+    for (Encoder* e : encoders) {
+        delete e;
     }
 
     vector<vector<int>> conf(num_classes, vector<int>(num_classes, 0));
@@ -222,11 +227,9 @@ int main(int argc, char* argv[]) {
 
     unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
 
+    shuffle(processed_data.begin(), processed_data.end(),
+            std::default_random_engine(seed));
     for (size_t epochs = 0; epochs < total_epochs; epochs++) {
-        printf("Epoch %zu:\n", epochs);
-        shuffle(processed_data.begin(), processed_data.end(),
-                std::default_random_engine(seed));
-
         double loss = 0;
         size_t correct = 0;
         size_t total = 0;
@@ -235,7 +238,7 @@ int main(int argc, char* argv[]) {
 
         for (size_t batch = 0; batch < processed_data.size() / batch_size;
              batch++) {
-            printf("\0331\rBatch: %zu/%zu", batch + 1,
+            printf("\0331\rEpoch: %zu, Batch: %zu/%zu", epochs, batch + 1,
                    processed_data.size() / batch_size);
 
             for (size_t idx = 0; idx < batch_size; idx++) {
@@ -281,6 +284,8 @@ int main(int argc, char* argv[]) {
                 for (size_t j = 0; j < desired_edge_updates[i].size(); j++) {
                     double update = desired_edge_updates[i][j].first /
                                     desired_edge_updates[i][j].second;
+                    desired_edge_updates[i][j].first = 0;
+                    desired_edge_updates[i][j].second = 0;
 
                     // Prevent adding nan or infinity
                     if (isnormal(update)) {
@@ -308,7 +313,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        printf(" Accuracy: %.2f, Loss: %.2f\n", correct / (double)total,
+        printf(" Accuracy: %.2f, Loss: %.2f", correct / (double)total,
                loss / (double)total);
     }
 

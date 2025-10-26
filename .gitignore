@@ -1,5 +1,9 @@
 bin/*
 !bin/.keep
+obj/*
+!obj/.keep
+include/*
+!include/.keep
 reservoirs/*
 !reservoirs/.keep
 *.json

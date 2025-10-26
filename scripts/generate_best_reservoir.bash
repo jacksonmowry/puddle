@@ -71,12 +71,17 @@ label_count=$(sort -n <${data_dir}/labels.csv | uniq | wc -l)
 best_seed=-1
 deltas=()
 best_min=0
+best_max=0
+composite_score=0
+intraclass_factor="0.0"
 for i in $(seq 1 $N); do
     seed=$((RANDOM % 65563))
 
-    printf '\0331\rGenerating Reservoir %d/%d' $((i)) $((N))
+    printf '\0330\rGenerating Reservoir %d/%d' $((i)) $((N))
     if ((i != 1)); then
         printf ' %s' "${deltas[*]}"
+        printf ' %s' "${best_max}"
+        printf ' (%s)' "${composite_score}"
     fi
 
     out=$(bash ./scripts/calculate_grade.bash -s "${s}" -p "${p}" -f $((num_features * num_bins)) -c "${c}" -o "${o}" -b "${num_bins}" -r ${seed} ${data_dir})
@@ -85,17 +90,24 @@ for i in $(seq 1 $N); do
         if [[ $best_seed -eq -1 ]]; then
             best_seed=${seed}
             deltas=($(awk '{print $5}' <<<"$(tail -n $label_count <<<"$out")"))
-            best_min=$(awk 'BEGIN {min = 1.0} {if ($5 < min) { min = $5 }} END {print min}' <<<"$(tail -n "${label_count}" <<<"${out}")")
+            best_min=$(awk 'BEGIN {min = 9999} {if ($5 < min) { min = $5 }} END {print min}' <<<"$(tail -n "${label_count}" <<<"${out}")")
+            best_max=$(awk '{if ($1 == "Maximum") {print $4}}' <<<"${out}")
+
+            # We attempting to maximize the interclass angle and minimize the intraclass angle
+            # We negate the interclass angle so that we can minimize the entire problem
+            composite_score=$(bc -l <<<"-1 * ${best_min} * (1 - ${intraclass_factor}) + ${best_max} * ${intraclass_factor}")
         else
             tmp_deltas=($(awk '{print $5}' <<<"$(tail -n $label_count <<<"$out")"))
-            # printf '\ntemp deltas: [%s]\n' "${tmp_deltas[*]}"
-            tmp_min=$(awk 'BEGIN {min = 1.0} {if ($5 < min) { min = $5 }} END {print min}' <<<"$(tail -n "${label_count}" <<<"${out}")")
-            # printf '\ntemp min: [%s]\n' "${tmp_min}"
-            # printf '\nbest min: [%s]\n' "${best_min}"
-            if (($(bc -l <<<"$tmp_min > $best_min"))); then
+            tmp_min=$(awk 'BEGIN {min = 9999} {if ($5 < min) { min = $5 }} END {print min}' <<<"$(tail -n "${label_count}" <<<"${out}")")
+            tmp_max=$(awk '{if ($1 == "Maximum") {print $4}}' <<<"${out}")
+            tmp_composite=$(bc -l <<<"-1 * ${tmp_min} * (1 - ${intraclass_factor}) + ${tmp_max} * ${intraclass_factor}")
+            printf ' | Found %s (Intra: %s, Inter: %s)\n' "${tmp_composite}" "${tmp_max}" "${tmp_min}"
+            if (($(bc -l <<<"$tmp_min != 9999 && $tmp_composite < $composite_score"))); then
                 best_seed=${seed}
                 best_min="${tmp_min}"
+                best_max="${tmp_max}"
                 deltas=(${tmp_deltas[@]})
+                composite_score="${tmp_composite}"
             fi
         fi
 
@@ -118,5 +130,4 @@ for i in $(seq 0 $((label_count - 1))); do
 done
 echo ""
 
-rm out.json
 bin/generate_reservoir -s ${s} -p ${p} -f $((num_features * num_bins)) -c ${c} -o ${o} -r $best_seed | framework-open/bin/network_tool >${output_file}
