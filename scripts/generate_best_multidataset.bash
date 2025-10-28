@@ -74,6 +74,8 @@ done
 best_seed=-1
 best_composite_score=9999
 intraclass_factor="0.4"
+intraclass="0"
+interclass="0"
 for i in $(seq 1 $N); do
     seed=$((RANDOM % 65563))
 
@@ -81,6 +83,10 @@ for i in $(seq 1 $N); do
 
     reservoir_worst_score="-9999.0"
     i=0
+
+    intra_tmp="0"
+    inter_tmp="0"
+
     for file in "${data_dirs[@]}"; do
         out=$(bash ./scripts/calculate_grade.bash -s "${s}" -p "${p}" -f $((max_num_features * num_bins)) -c "${c}" -o "${o}" -b "${num_bins}" -r ${seed} "${file}")
 
@@ -91,6 +97,8 @@ for i in $(seq 1 $N); do
 
         if (($(bc -l <<<"${composite_score} > ${reservoir_worst_score}"))); then
             reservoir_worst_score="${composite_score}"
+            intra_tmp="${intra}"
+            inter_tmp="${inter}"
         fi
 
         i=$((i + 1))
@@ -99,6 +107,8 @@ for i in $(seq 1 $N); do
     if (($(bc -l <<<"${reservoir_worst_score} < "${best_composite_score}))); then
         best_composite_score="${reservoir_worst_score}"
         best_seed="${seed}"
+        intraclass="${intra_tmp}"
+        interclass="${inter_tmp}"
     fi
 done
 
@@ -110,6 +120,6 @@ if [[ $best_seed -eq -1 ]]; then
 fi
 
 echo ""
-echo "Best seed: ${best_seed} Composite score: ${best_composite_score}"
+echo "Best seed: ${best_seed} Composite score: ${best_composite_score} Intra: ${intraclass} Inter: ${interclass}"
 
 bin/generate_reservoir -s ${s} -p ${p} -f $((max_num_features * num_bins)) -c ${c} -o ${o} -r $best_seed | framework-open/bin/network_tool >${output_file}
