@@ -73,7 +73,7 @@ done
 
 best_seed=-1
 best_composite_score=9999
-intraclass_factor="0.0"
+intraclass_factor="0.4"
 for i in $(seq 1 $N); do
     seed=$((RANDOM % 65563))
 

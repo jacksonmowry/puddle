@@ -130,6 +130,7 @@ int main(int argc, char* argv[]) {
     while (!data.eof()) {
         string line;
         getline(data, line);
+        replace(line.begin(), line.end(), ',', ' ');
 
         double data;
         int idx = 0;
@@ -212,6 +213,8 @@ int main(int argc, char* argv[]) {
         delete e;
     }
 
+    delete n;
+
     vector<vector<int>> conf(num_classes, vector<int>(num_classes, 0));
     vector<vector<pair<double, int>>> desired_edge_updates(
         num_classes, vector<pair<double, int>>(num_outputs + 1));
@@ -227,23 +230,36 @@ int main(int argc, char* argv[]) {
 
     unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    shuffle(processed_data.begin(), processed_data.end(),
+    vector<Observation> train_set;
+    vector<Observation> test_set;
+
+    for (size_t i = 0; i < processed_data.size(); i++) {
+        double chance = rand() / (double)RAND_MAX;
+
+        if (chance < 0.75) {
+            train_set.push_back(processed_data[i]);
+        } else {
+            test_set.push_back(processed_data[i]);
+        }
+    }
+
+    shuffle(train_set.begin(), train_set.end(),
             std::default_random_engine(seed));
+    size_t last_correct = 0;
     for (size_t epochs = 0; epochs < total_epochs; epochs++) {
         double loss = 0;
         size_t correct = 0;
         size_t total = 0;
 
-        const size_t batch_size = 1;
+        const size_t batch_size = 10;
 
-        for (size_t batch = 0; batch < processed_data.size() / batch_size;
-             batch++) {
+        for (size_t batch = 0; batch < train_set.size() / batch_size; batch++) {
             printf("\0331\rEpoch: %zu, Batch: %zu/%zu", epochs, batch + 1,
-                   processed_data.size() / batch_size);
+                   train_set.size() / batch_size);
 
             for (size_t idx = 0; idx < batch_size; idx++) {
                 size_t work_idx = (batch * batch_size) + idx;
-                Observation o = processed_data[work_idx];
+                Observation o = train_set[work_idx];
 
                 // Wx + b = y
                 vector<double> y(num_classes);
@@ -315,13 +331,57 @@ int main(int argc, char* argv[]) {
 
         printf(" Accuracy: %.2f, Loss: %.2f", correct / (double)total,
                loss / (double)total);
+
+        if (epochs == total_epochs - 1) {
+            last_correct = correct;
+        }
     }
 
-    printf("Final weight matrix:\n");
-    for (size_t i = 0; i < w.size(); i++) {
-        for (size_t j = 0; j < w[i].size(); j++) {
-            printf("%6.3f ", w[i][j]);
+    printf("\n\nTraining accuracy: %f\n",
+           (double)last_correct / train_set.size());
+
+    // printf("Final weight matrix:\n");
+    // for (size_t i = 0; i < w.size(); i++) {
+    //     for (size_t j = 0; j < w[i].size(); j++) {
+    //         printf("%6.3f ", w[i][j]);
+    //     }
+    //     printf("\n");
+    // }
+
+    vector<vector<int>> test_conf(num_classes, vector<int>(num_classes, 0));
+    double correct = 0;
+    double test_loss = 0.0;
+    for (size_t i = 0; i < test_set.size(); i++) {
+        Observation o = test_set[i];
+
+        vector<double> y_hat(num_classes);
+
+        for (size_t i = 0; i < num_classes; i++) {
+            for (size_t j = 0; j < num_outputs + 1; j++) {
+                y_hat[i] += w[i][j] * o.x[j];
+            }
         }
-        printf("\n");
+
+        int prediction = max_idx(y_hat);
+        if (prediction == o.y) {
+            correct++;
+        }
+        softmax(y_hat);
+
+        test_loss += -log(y_hat[o.y]);
+        test_conf[o.y][prediction]++;
     }
+
+    printf("TEST CONFUSION MATRIX:\n");
+    for (size_t i = 0; i < test_conf.size(); i++) {
+        for (size_t j = 0; j < test_conf[i].size(); j++) {
+            printf("%4d ", test_conf[i][j]);
+            test_conf[i][j] = 0;
+        }
+        puts("");
+    }
+    puts("");
+
+    printf("Test Accuracy: %.2f\n", correct / test_set.size());
+    printf("Test Loss: %.2f\n", test_loss / test_set.size());
 }

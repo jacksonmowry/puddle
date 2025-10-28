@@ -39,6 +39,25 @@ const char* empty_network =
     "value\":0,\"name\":"
     "\"Leak\",\"size\":1,\"type\":66}]}}";
 
+int rand_normal(int base) {
+    double x;
+    double y;
+    double r;
+
+    do {
+        x = 2.0 * rand() / RAND_MAX - 1;
+        y = 2.0 * rand() / RAND_MAX - 1;
+
+        r = x * x + y * y;
+    } while (r == 0.0 || r > 1.0);
+
+    double d = sqrt(-2.0 * log(r) / r);
+    double n1 = x * d;
+    double n2 = y * d;
+
+    return n1 * base;
+}
+
 int main(int argc, char* argv[]) {
     size_t resevoir_size = 100;
     double input_percent = 0.20;
@@ -221,11 +240,11 @@ int main(int argc, char* argv[]) {
     printf("SNP_ALL Leak 1\n");
 
     for (size_t i = 0; i < feature_neurons + resevoir_size; i++) {
-        printf("SNP %zu Threshold %d\n", i, rand() % 255 + 1);
+        printf("SNP %zu Threshold %d\n", i, abs(rand_normal(32)) + 1);
     }
     for (size_t i = feature_neurons + resevoir_size;
          i < feature_neurons + resevoir_size + class_neurons; i++) {
-        printf("SNP %zu Threshold %d\n", i, rand() % 255 + 1);
+        printf("SNP %zu Threshold %d\n", i, abs(rand_normal(32)) + 1);
         printf("SNP %zu Leak %d\n", i, 0);
     }
 
@@ -238,7 +257,7 @@ int main(int argc, char* argv[]) {
 
             printf("AE %zu %zu\n", i, feature_neurons + j);
             printf("SEP %zu %zu Weight %d\n", i, feature_neurons + j,
-                   (((rand() % 2) * 2) - 1) * rand() % 256);
+                   rand_normal(16));
             printf("SEP %zu %zu Delay %d\n", i, feature_neurons + j,
                    rand() % 15 + 1);
         }
@@ -250,8 +269,7 @@ int main(int argc, char* argv[]) {
             size_t pre = feature_neurons + i;
             size_t post = feature_neurons + neurons[i].connections[j];
             printf("AE %zu %zu\n", pre, post);
-            printf("SEP %zu %zu Weight %d\n", pre, post,
-                   (((rand() % 2) * 2) - 1) * rand() % 256);
+            printf("SEP %zu %zu Weight %d\n", pre, post, rand_normal(16));
             printf("SEP %zu %zu Delay %d\n", pre, post, rand() % 15 + 1);
         }
     }
@@ -266,7 +284,7 @@ int main(int argc, char* argv[]) {
 
             printf("AE %zu %zu\n", feature_neurons + j, i);
             printf("SEP %zu %zu Weight %d\n", feature_neurons + j, i,
-                   (((rand() % 2) * 2) - 1) * rand() % 256);
+                   rand_normal(16));
             printf("SEP %zu %zu Delay %d\n", feature_neurons + j, i,
                    rand() % 15 + 1);
         }
